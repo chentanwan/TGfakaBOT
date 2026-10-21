@@ -6,6 +6,10 @@ TGfakaBOT 是一个完全通过 Telegram Bot 完成购物与管理操作的开�
 
 > Status: **v0.1 MVP / early development**. Review the code and test with Telegram's test environment before production use.
 
+## Contact / 联系方式
+
+- Telegram: [@cclchat_bot](https://t.me/cclchat_bot)
+
 ## Features / 功能
 
 ### User / 用户端
