@@ -51,6 +51,7 @@ class CardStatus(str, enum.Enum):
 
 class OrderStatus(str, enum.Enum):
     PENDING_PAYMENT = "pending_payment"
+    PAYMENT_PROCESSING = "payment_processing"
     PAID = "paid"
     FULFILLED = "fulfilled"
     EXPIRED = "expired"

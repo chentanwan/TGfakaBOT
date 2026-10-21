@@ -141,7 +141,9 @@ alembic revision --autogenerate -m "describe change"
 - One card and one default SKU per order.
 - Long polling only.
 - Chinese-first UI; full i18n is planned.
-- Fulfillment retry worker and automated Stars refunds are planned.
+- Payment exceptions can be reviewed and refunded from the Telegram admin panel.
+- Refund API timeouts stay in `refund_pending` for manual reconciliation to avoid double refunds.
+- Strict exactly-once Telegram message delivery is not possible; `/orders` remains the recovery path.
 - PostgreSQL integration tests and production observability need further expansion.
 
 ## License

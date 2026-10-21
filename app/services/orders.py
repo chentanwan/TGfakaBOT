@@ -9,11 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import card_vault
-from app.db.base import CardStatus, FulfillmentJobStatus, OrderStatus, ProductStatus
+from app.db.base import CardStatus, OrderStatus, ProductStatus
 from app.db.models import (
     SKU,
     Card,
-    FulfillmentJob,
     Order,
     OrderItem,
     PaymentCharge,
@@ -53,6 +52,7 @@ class DeliveredOrder:
     total_amount: int
     secret: str
     duplicate: bool = False
+    should_deliver: bool = True
 
 
 async def ensure_user(
@@ -230,8 +230,9 @@ async def validate_pre_checkout(
         card = await session.scalar(select(Card).where(Card.order_item_id == item_id))
         if card is None or card.status != CardStatus.RESERVED:
             return False, "库存状态变化，请重新下单。"
+        order.status = OrderStatus.PAYMENT_PROCESSING
         order.precheckout_approved_at = now
-        order.reservation_expires_at = now + timedelta(minutes=5)
+        order.reservation_expires_at = now + timedelta(hours=24)
         card.reserved_until = order.reservation_expires_at
         return True, ""
 
@@ -251,98 +252,112 @@ async def settle_payment(
     pending_error: str | None = None
     result: DeliveredOrder | None = None
     async with session.begin():
-        existing = await session.scalar(
-            select(PaymentCharge).where(
-                PaymentCharge.telegram_payment_charge_id == telegram_payment_charge_id
+        await session.execute(
+            insert(PaymentCharge)
+            .values(
+                telegram_payment_charge_id=telegram_payment_charge_id,
+                provider_payment_charge_id=provider_payment_charge_id,
+                invoice_payload=invoice_payload,
+                currency=currency,
+                total_amount=total_amount,
+                status="succeeded",
+                resolution_status="unmatched",
+                raw_payload=raw_payload,
+                received_at=now,
             )
+            .on_conflict_do_nothing(index_elements=["telegram_payment_charge_id"])
         )
-        if existing and existing.order_id:
-            return await _delivered_order(session, existing.order_id, duplicate=True)
-
-        if existing is None:
-            statement = (
-                insert(PaymentCharge)
-                .values(
-                    telegram_payment_charge_id=telegram_payment_charge_id,
-                    provider_payment_charge_id=provider_payment_charge_id,
-                    invoice_payload=invoice_payload,
-                    currency=currency,
-                    total_amount=total_amount,
-                    status="succeeded",
-                    resolution_status="unmatched",
-                    raw_payload=raw_payload,
-                    received_at=now,
-                )
-                .on_conflict_do_nothing(index_elements=["telegram_payment_charge_id"])
-            )
-            await session.execute(statement)
-            existing = await session.scalar(
-                select(PaymentCharge)
-                .where(PaymentCharge.telegram_payment_charge_id == telegram_payment_charge_id)
-                .with_for_update()
-            )
-        if existing is None:
+        charge = await session.scalar(
+            select(PaymentCharge)
+            .where(PaymentCharge.telegram_payment_charge_id == telegram_payment_charge_id)
+            .with_for_update()
+        )
+        if charge is None:
             raise ShopError("支付流水保存失败，请联系客服")
-
-        row = (
-            await session.execute(
-                select(Order, User)
-                .join(User, User.id == Order.user_id)
-                .where(Order.invoice_payload == invoice_payload)
-                .with_for_update(of=Order)
+        if charge.order_id is not None:
+            linked_order = await session.scalar(
+                select(Order).where(Order.id == charge.order_id).with_for_update()
             )
-        ).one_or_none()
-        if row is None:
-            pending_error = "付款已记录，但订单无法匹配，请联系客服"
-        else:
-            order, user = row
-            if (
-                user.telegram_user_id != telegram_user_id
-                or currency != "XTR"
-                or total_amount != order.total_amount
-            ):
-                existing.resolution_status = "conflict"
-                pending_error = "付款已记录，但订单校验异常，请联系客服"
-            elif order.status == OrderStatus.FULFILLED:
-                existing.order_id = order.id
-                existing.resolution_status = "linked"
-                result = await _delivered_order(session, order.id, duplicate=True)
+            if linked_order is None:
+                pending_error = "支付已记录，但关联订单缺失，请联系客服"
+            elif linked_order.status == OrderStatus.FULFILLED:
+                result = await _delivered_order(
+                    session, linked_order.id, duplicate=True, include_secret=False
+                )
+            elif linked_order.status == OrderStatus.PAYMENT_EXCEPTION:
+                pending_error = "支付已记录，订单正在人工处理中，请联系客服"
+            elif linked_order.status == OrderStatus.REFUND_PENDING:
+                pending_error = "该笔支付正在退款处理中"
+            elif linked_order.status == OrderStatus.REFUNDED:
+                pending_error = "该笔支付已经退款"
             else:
-                item = await session.scalar(
-                    select(OrderItem).where(OrderItem.order_id == order.id)
+                pending_error = "支付已记录，订单状态正在处理中"
+        else:
+            row = (
+                await session.execute(
+                    select(Order, User)
+                    .join(User, User.id == Order.user_id)
+                    .where(Order.invoice_payload == invoice_payload)
+                    .with_for_update(of=Order)
                 )
-                card = (
-                    await session.scalar(
-                        select(Card).where(Card.order_item_id == item.id).with_for_update()
+            ).one_or_none()
+            if row is None:
+                pending_error = "付款已记录，但订单无法匹配，请联系客服"
+            else:
+                order, user = row
+                other_charge = await session.scalar(
+                    select(PaymentCharge.id).where(
+                        PaymentCharge.order_id == order.id,
+                        PaymentCharge.id != charge.id,
                     )
-                    if item
-                    else None
                 )
-                existing.order_id = order.id
-                existing.resolution_status = "linked"
-                order.paid_at = now
-                if card is None or card.status != CardStatus.RESERVED:
-                    order.status = OrderStatus.PAYMENT_EXCEPTION
-                    pending_error = "支付成功，订单正在人工处理中，请联系客服"
+                if other_charge is not None:
+                    charge.resolution_status = "conflict"
+                    pending_error = "检测到订单重复扣款，已保留流水等待退款处理"
+                elif (
+                    user.telegram_user_id != telegram_user_id
+                    or currency != "XTR"
+                    or total_amount != order.total_amount
+                ):
+                    charge.resolution_status = "conflict"
+                    pending_error = "付款已记录，但订单校验异常，请联系客服"
                 else:
-                    card.status = CardStatus.DELIVERED
-                    card.delivered_at = now
-                    card.reserved_until = None
-                    order.status = OrderStatus.FULFILLED
-                    order.fulfilled_at = now
-                    session.add(
-                        FulfillmentJob(
-                            order_id=order.id,
-                            status=FulfillmentJobStatus.PENDING,
-                            available_at=now,
+                    item = await session.scalar(
+                        select(OrderItem).where(OrderItem.order_id == order.id)
+                    )
+                    card = (
+                        await session.scalar(
+                            select(Card).where(Card.order_item_id == item.id).with_for_update()
                         )
+                        if item
+                        else None
                     )
-                    result = DeliveredOrder(
-                        public_id=order.public_id,
-                        product_name=item.product_name_snapshot,
-                        total_amount=order.total_amount,
-                        secret=card_vault.decrypt(card.secret_ciphertext),
-                    )
+                    charge.order_id = order.id
+                    charge.resolution_status = "linked"
+                    order.paid_at = now
+                    if card is None or card.status != CardStatus.RESERVED:
+                        order.status = OrderStatus.PAYMENT_EXCEPTION
+                        order.payment_exception_reason = "reserved_card_missing_or_invalid"
+                        pending_error = "支付成功，订单正在人工处理中，请联系客服"
+                    else:
+                        try:
+                            secret = card_vault.decrypt(card.secret_ciphertext)
+                        except Exception:
+                            order.status = OrderStatus.PAYMENT_EXCEPTION
+                            order.payment_exception_reason = "card_secret_decryption_failed"
+                            pending_error = "支付成功，但交付数据异常，请联系客服"
+                        else:
+                            card.status = CardStatus.DELIVERED
+                            card.delivered_at = now
+                            card.reserved_until = None
+                            order.status = OrderStatus.FULFILLED
+                            order.fulfilled_at = now
+                            result = DeliveredOrder(
+                                public_id=order.public_id,
+                                product_name=item.product_name_snapshot,
+                                total_amount=order.total_amount,
+                                secret=secret,
+                            )
 
     if pending_error:
         raise ShopError(pending_error)
@@ -352,7 +367,11 @@ async def settle_payment(
 
 
 async def _delivered_order(
-    session: AsyncSession, order_id: uuid.UUID, *, duplicate: bool
+    session: AsyncSession,
+    order_id: uuid.UUID,
+    *,
+    duplicate: bool,
+    include_secret: bool = True,
 ) -> DeliveredOrder:
     row = (
         await session.execute(
@@ -367,8 +386,9 @@ async def _delivered_order(
         public_id=order.public_id,
         product_name=item.product_name_snapshot,
         total_amount=order.total_amount,
-        secret=card_vault.decrypt(card.secret_ciphertext),
+        secret=card_vault.decrypt(card.secret_ciphertext) if include_secret else "",
         duplicate=duplicate,
+        should_deliver=include_secret,
     )
 
 

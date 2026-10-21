@@ -153,12 +153,15 @@ async def successful_payment(message: Message) -> None:
         except ShopError as exc:
             await message.answer(f"⚠️ {html.escape(str(exc))}")
             return
-    duplicate_note = "\n（该支付已处理，本次为重复确认。）" if delivered.duplicate else ""
+    if not delivered.should_deliver:
+        await message.answer(
+            "✅ 该支付此前已经处理，未重复发送卡密。可通过 /orders 查看订单。"
+        )
+        return
     await message.answer(
         "✅ <b>支付成功，商品已交付</b>\n\n"
         f"商品：{html.escape(delivered.product_name)}\n"
         f"订单：<code>{delivered.public_id}</code>\n"
         f"卡密：<code>{html.escape(delivered.secret)}</code>\n\n"
         "请妥善保管卡密，不要转发或公开。"
-        f"{duplicate_note}"
     )

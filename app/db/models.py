@@ -117,6 +117,10 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     precheckout_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payment_exception_reason: Mapped[str | None] = mapped_column(Text)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    resolution_action: Mapped[str | None] = mapped_column(String(40))
 
 
 class OrderItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -152,6 +156,12 @@ class Card(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             postgresql_where=text("status = 'available'"),
         ),
         Index("ix_cards_expiry", "status", "reserved_until"),
+        Index(
+            "uq_cards_order_item",
+            "order_item_id",
+            unique=True,
+            postgresql_where=text("order_item_id IS NOT NULL"),
+        ),
     )
 
     sku_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("skus.id"), nullable=False)
@@ -192,6 +202,11 @@ class PaymentCharge(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refund_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refund_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refund_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    refund_last_error: Mapped[str | None] = mapped_column(Text)
+    refund_requested_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class FulfillmentJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
