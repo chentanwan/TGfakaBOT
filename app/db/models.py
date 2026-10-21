@@ -1,0 +1,220 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import (
+    Base,
+    CardStatus,
+    FulfillmentJobStatus,
+    OrderStatus,
+    PaymentStatus,
+    ProductStatus,
+    TimestampMixin,
+    UserStatus,
+    UUIDPrimaryKeyMixin,
+)
+
+
+def enum_column(enum_type: type, name: str, default: object) -> Mapped:
+    return mapped_column(
+        Enum(
+            enum_type,
+            name=name,
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        default=default,
+        nullable=False,
+    )
+
+
+class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "users"
+
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(64))
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[UserStatus] = enum_column(UserStatus, "user_status", UserStatus.ACTIVE)
+
+
+class Category(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "categories"
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    slug: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class Product(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "products"
+
+    category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("categories.id"))
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[ProductStatus] = enum_column(
+        ProductStatus, "product_status", ProductStatus.DRAFT
+    )
+
+
+class SKU(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "skus"
+    __table_args__ = (
+        CheckConstraint("price_xtr >= 1", name="positive_price_xtr"),
+        Index(
+            "uq_skus_one_default_per_product",
+            "product_id",
+            unique=True,
+            postgresql_where=text("is_default = true"),
+        ),
+    )
+
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), default="Default", nullable=False)
+    price_xtr: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class Order(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "orders"
+    __table_args__ = (
+        CheckConstraint("currency = 'XTR'", name="currency_xtr"),
+        CheckConstraint("total_amount >= 1", name="positive_total_amount"),
+        Index("ix_orders_user_created", "user_id", "created_at"),
+    )
+
+    public_id: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    status: Mapped[OrderStatus] = enum_column(
+        OrderStatus, "order_status", OrderStatus.PENDING_PAYMENT
+    )
+    currency: Mapped[str] = mapped_column(String(3), default="XTR", nullable=False)
+    total_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    invoice_payload: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    reservation_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    precheckout_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OrderItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "order_items"
+    __table_args__ = (
+        CheckConstraint("unit_price >= 1", name="positive_unit_price"),
+        CheckConstraint("quantity >= 1", name="positive_quantity"),
+        CheckConstraint("line_total = unit_price * quantity", name="valid_line_total"),
+        UniqueConstraint("order_id", "sku_id"),
+    )
+
+    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id"), nullable=False)
+    sku_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("skus.id"), nullable=False)
+    product_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    sku_name_snapshot: Mapped[str] = mapped_column(String(120), nullable=False)
+    unit_price: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    line_total: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class Card(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "cards"
+    __table_args__ = (
+        CheckConstraint(
+            "(status IN ('available','disabled') AND order_item_id IS NULL) OR "
+            "(status IN ('reserved','delivered') AND order_item_id IS NOT NULL)",
+            name="valid_card_assignment",
+        ),
+        Index(
+            "ix_cards_allocatable",
+            "sku_id",
+            "id",
+            postgresql_where=text("status = 'available'"),
+        ),
+        Index("ix_cards_expiry", "status", "reserved_until"),
+    )
+
+    sku_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("skus.id"), nullable=False)
+    secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    secret_fingerprint: Mapped[bytes] = mapped_column(LargeBinary, unique=True, nullable=False)
+    status: Mapped[CardStatus] = enum_column(CardStatus, "card_status", CardStatus.AVAILABLE)
+    order_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("order_items.id"))
+    reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentCharge(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "payment_charges"
+    __table_args__ = (
+        CheckConstraint("currency = 'XTR'", name="currency_xtr"),
+        CheckConstraint("total_amount >= 1", name="positive_total_amount"),
+        Index(
+            "uq_payment_charge_order",
+            "order_id",
+            unique=True,
+            postgresql_where=text("order_id IS NOT NULL"),
+        ),
+    )
+
+    order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("orders.id"))
+    telegram_payment_charge_id: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False
+    )
+    provider_payment_charge_id: Mapped[str | None] = mapped_column(String(255))
+    telegram_update_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
+    invoice_payload: Mapped[str] = mapped_column(String(128), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    total_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[PaymentStatus] = enum_column(
+        PaymentStatus, "payment_status", PaymentStatus.SUCCEEDED
+    )
+    resolution_status: Mapped[str] = mapped_column(String(20), default="unmatched", nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FulfillmentJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "fulfillment_jobs"
+
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("orders.id"), unique=True, nullable=False
+    )
+    status: Mapped[FulfillmentJobStatus] = enum_column(
+        FulfillmentJobStatus, "fulfillment_job_status", FulfillmentJobStatus.PENDING
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(80))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class Setting(TimestampMixin, Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

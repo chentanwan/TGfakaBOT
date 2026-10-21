@@ -1,0 +1,39 @@
+[project]
+name = "tgfakabot"
+version = "0.1.0"
+description = "Telegram-native digital goods storefront powered by Telegram Stars"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "TGfakaBOT contributors" }]
+dependencies = [
+  "aiogram==3.30.0",
+  "SQLAlchemy[asyncio]==2.0.44",
+  "asyncpg==0.30.0",
+  "alembic==1.17.2",
+  "pydantic-settings==2.11.0",
+  "redis==6.4.0",
+  "cryptography==46.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.2",
+  "pytest-asyncio==1.2.0",
+  "ruff==0.14.3",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests*", "migrations*"]

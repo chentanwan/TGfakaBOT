@@ -1,0 +1,1 @@
+"""TGfakaBOT application package."""
