@@ -13,7 +13,9 @@ from app.services.payment_exceptions import (
     finish_star_refund,
     fulfill_payment_exception,
     list_payment_exceptions,
+    list_refund_pending,
     prepare_star_refund,
+    record_refund_uncertain,
 )
 
 router = Router(name="payment-admin")
@@ -60,6 +62,27 @@ async def payment_exception_list(callback: CallbackQuery) -> None:
     await callback.message.answer(
         "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
+
+
+@router.callback_query(F.data == "adm:refunds:pending")
+async def refund_pending_list(callback: CallbackQuery) -> None:
+    if not _is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    await callback.answer()
+    async with SessionFactory() as session:
+        pending = await list_refund_pending(session)
+    if not pending:
+        await callback.message.answer("✅ 当前没有退款处理中的订单。")
+        return
+    lines = ["⏳ <b>退款处理中</b>"]
+    for item in pending:
+        error = html.escape(item.last_error or "暂无错误")
+        lines.append(
+            f"\n<code>{item.public_id}</code> · 用户 <code>{item.telegram_user_id}</code>"
+            f" · ⭐ {item.total_amount}\n尝试 {item.attempts} 次 · {error}"
+        )
+    await callback.message.answer("\n".join(lines))
 
 
 @router.callback_query(F.data.startswith("adm:pex:ask:"))
@@ -190,6 +213,9 @@ async def _execute_refund(callback: CallbackQuery, order_id: uuid.UUID) -> None:
         await callback.message.edit_text(f"❌ {html.escape(str(exc))}")
         return
     except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        async with SessionFactory() as session:
+            await record_refund_uncertain(session, order_id=order_id, error=error)
         await callback.message.edit_text(
             "⚠️ 退款 API 返回结果不确定，订单保持退款处理中。\n"
             f"错误：<code>{html.escape(type(exc).__name__)}</code>"

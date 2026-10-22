@@ -20,8 +20,9 @@ async def release_expired_orders_once() -> int:
             await session.scalars(
                 select(Order)
                 .where(
-                    Order.status == OrderStatus.PENDING_PAYMENT,
-                    Order.precheckout_approved_at.is_(None),
+                    Order.status.in_(
+                        [OrderStatus.PENDING_PAYMENT, OrderStatus.PAYMENT_PROCESSING]
+                    ),
                     Order.reservation_expires_at < now,
                 )
                 .limit(100)

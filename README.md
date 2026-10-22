@@ -146,7 +146,18 @@ alembic revision --autogenerate -m "describe change"
 - `/orders` is paginated; `/terms`, `/support`, and `/paysupport` support Stars users.
 - Refund API timeouts stay in `refund_pending` for manual reconciliation to avoid double refunds.
 - Strict exactly-once Telegram message delivery is not possible; `/orders` remains the recovery path.
-- PostgreSQL integration tests and production observability need further expansion.
+- PostgreSQL/Redis test services and opt-in integration tests are provided in `docker-compose.test.yml`.
+- The bot health check verifies PostgreSQL and Redis; external Telegram polling monitoring is recommended.
+
+## Integration tests / 集成测试
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+RUN_INTEGRATION=1 DATABASE_URL=postgresql+asyncpg://tgfakabot:test-password@127.0.0.1:55432/tgfakabot_test pytest tests/integration -q
+docker compose -f docker-compose.test.yml down
+```
+
+Integration tests apply Alembic migrations to the test database before running.
 
 ## License
 

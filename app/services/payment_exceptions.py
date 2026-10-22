@@ -35,6 +35,16 @@ class RefundRequest:
 
 
 @dataclass(slots=True)
+class RefundPendingSummary:
+    order_id: uuid.UUID
+    public_id: str
+    telegram_user_id: int
+    total_amount: int
+    attempts: int
+    last_error: str
+
+
+@dataclass(slots=True)
 class ManualDelivery:
     order_id: uuid.UUID
     public_id: str
@@ -77,6 +87,48 @@ async def list_payment_exceptions(
         )
         for order, user, item, charge, stock in rows
     ]
+
+
+async def list_refund_pending(
+    session: AsyncSession, limit: int = 20
+) -> list[RefundPendingSummary]:
+    rows = (
+        await session.execute(
+            select(Order, User, PaymentCharge)
+            .join(User, User.id == Order.user_id)
+            .join(PaymentCharge, PaymentCharge.order_id == Order.id)
+            .where(
+                Order.status == OrderStatus.REFUND_PENDING,
+                PaymentCharge.status == PaymentStatus.REFUND_PENDING,
+            )
+            .order_by(PaymentCharge.refund_requested_at)
+            .limit(limit)
+        )
+    ).all()
+    return [
+        RefundPendingSummary(
+            order_id=order.id,
+            public_id=order.public_id,
+            telegram_user_id=user.telegram_user_id,
+            total_amount=order.total_amount,
+            attempts=charge.refund_attempts,
+            last_error=charge.refund_last_error or "",
+        )
+        for order, user, charge in rows
+    ]
+
+
+async def record_refund_uncertain(
+    session: AsyncSession, *, order_id: uuid.UUID, error: str
+) -> None:
+    async with session.begin():
+        charge = await session.scalar(
+            select(PaymentCharge)
+            .where(PaymentCharge.order_id == order_id)
+            .with_for_update()
+        )
+        if charge is not None and charge.status == PaymentStatus.REFUND_PENDING:
+            charge.refund_last_error = error[:1000]
 
 
 async def fulfill_payment_exception(

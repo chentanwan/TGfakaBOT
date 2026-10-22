@@ -18,6 +18,7 @@ from app.services.orders import (
     ShopError,
     cancel_unpaid_order,
     create_order,
+    get_user_order,
     list_products,
     list_user_orders,
     settle_payment,
@@ -93,24 +94,51 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
         await target.answer("📦 暂无订单。")
         return
     blocks = []
+    secret_rows = []
     for order in orders:
-        text = (
+        blocks.append(
             f"<b>{html.escape(order.product_name)}</b>\n"
             f"订单：<code>{order.public_id}</code>\n"
             f"金额：⭐ {order.total_amount}"
         )
-        if order.secret:
-            text += f"\n卡密：<code>{html.escape(order.secret)}</code>"
-        blocks.append(text)
+        secret_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🔐 查看 {order.public_id}",
+                    callback_data=f"order_secret:{order.public_id}",
+                )
+            ]
+        )
     rows = []
     if page > 0:
         rows.append(InlineKeyboardButton(text="⬅️ 上一页", callback_data=f"orders:{page - 1}"))
     if has_next:
         rows.append(InlineKeyboardButton(text="下一页 ➡️", callback_data=f"orders:{page + 1}"))
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[rows]) if rows else None
+    keyboard_rows = secret_rows + ([rows] if rows else [])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
     await target.answer(
         f"📦 <b>我的订单 · 第 {page + 1} 页</b>\n\n" + "\n\n".join(blocks),
         reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("order_secret:"))
+async def reveal_order_secret(callback: CallbackQuery) -> None:
+    await callback.answer()
+    public_id = callback.data.split(":", 1)[1]
+    async with SessionFactory() as session:
+        order = await get_user_order(session, callback.from_user.id, public_id)
+    if order is None:
+        await callback.message.answer("❌ 订单不存在或不属于当前用户。")
+        return
+    if not order.secret:
+        await callback.message.answer("⏳ 该订单尚无可查看的卡密。")
+        return
+    await callback.message.answer(
+        "🔐 <b>订单卡密</b>\n\n"
+        f"订单：<code>{order.public_id}</code>\n"
+        f"卡密：<code>{html.escape(order.secret)}</code>\n\n"
+        "请勿转发；可在确认保存后删除这条 Telegram 消息。"
     )
 
 
@@ -118,8 +146,19 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
 async def terms(message: Message) -> None:
     await message.answer(
         "<b>购买条款</b>\n\n"
-        "数字商品付款后自动交付。请在付款前确认商品信息；卡密一经展示，除法律要求或商品无效外不支持退款。"
+        "数字商品付款后自动交付。请在付款前确认商品信息；卡密一经展示，除法律要求或商品无效外不支持退款。\n"
         "如发生扣款但未交付，请使用 /paysupport 联系支持。"
+    )
+
+
+@router.message(Command("privacy"))
+async def privacy(message: Message) -> None:
+    await message.answer(
+        "<b>隐私说明</b>\n\n"
+        "为完成订单、支付幂等、退款和客服处理，系统会保存 Telegram 用户 ID、用户名/显示名、"
+        "订单与支付流水、支付 charge ID 及 Telegram 支付 payload。卡密在数据库中加密保存。\n\n"
+        "当您查看卡密时，消息会由 Telegram 保存；请勿向客服发送完整卡密，并可在确认保存后删除含密消息。"
+        "支付及订单记录会按运营和法定留存要求保存。删除或数据问题请使用 /support 联系。"
     )
 
 

@@ -11,7 +11,7 @@ services:
         condition: service_healthy
     command: ["sh", "-c", "alembic upgrade head && python -m app.main"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-m", "app.health"]
       interval: 30s
       timeout: 5s
       retries: 3

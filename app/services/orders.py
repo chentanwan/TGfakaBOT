@@ -58,18 +58,23 @@ class DeliveredOrder:
 async def ensure_user(
     session: AsyncSession, telegram_user_id: int, username: str | None, display_name: str
 ) -> User:
-    user = await session.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
-    if user is None:
-        user = User(
+    await session.execute(
+        insert(User)
+        .values(
             telegram_user_id=telegram_user_id,
             username=username,
             display_name=display_name,
         )
-        session.add(user)
-        await session.flush()
-    else:
-        user.username = username
-        user.display_name = display_name
+        .on_conflict_do_update(
+            index_elements=["telegram_user_id"],
+            set_={"username": username, "display_name": display_name},
+        )
+    )
+    user = await session.scalar(
+        select(User).where(User.telegram_user_id == telegram_user_id).with_for_update()
+    )
+    if user is None:
+        raise ShopError("用户记录创建失败")
     return user
 
 
@@ -392,6 +397,36 @@ async def _delivered_order(
     )
 
 
+async def get_user_order(
+    session: AsyncSession, telegram_user_id: int, public_id: str
+) -> DeliveredOrder | None:
+    row = (
+        await session.execute(
+            select(Order, OrderItem, Card)
+            .join(User, User.id == Order.user_id)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .outerjoin(Card, Card.order_item_id == OrderItem.id)
+            .where(
+                User.telegram_user_id == telegram_user_id,
+                Order.public_id == public_id,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    order, item, card = row
+    return DeliveredOrder(
+        public_id=order.public_id,
+        product_name=item.product_name_snapshot,
+        total_amount=order.total_amount,
+        secret=(
+            card_vault.decrypt(card.secret_ciphertext)
+            if card and order.status == OrderStatus.FULFILLED
+            else ""
+        ),
+    )
+
+
 async def list_user_orders(
     session: AsyncSession, telegram_user_id: int, *, offset: int = 0, limit: int = 5
 ) -> list[DeliveredOrder]:
@@ -412,11 +447,7 @@ async def list_user_orders(
             public_id=order.public_id,
             product_name=item.product_name_snapshot,
             total_amount=order.total_amount,
-            secret=(
-                card_vault.decrypt(card.secret_ciphertext)
-                if card and order.status == OrderStatus.FULFILLED
-                else ""
-            ),
+            secret="",
         )
         for order, item, card in rows
     ]
