@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,7 @@ class RefundRequest:
     order_id: uuid.UUID
     telegram_user_id: int
     telegram_payment_charge_id: str
+    claim_token: uuid.UUID | None = None
     already_refunded: bool = False
 
 
@@ -116,19 +117,6 @@ async def list_refund_pending(
         )
         for order, user, charge in rows
     ]
-
-
-async def record_refund_uncertain(
-    session: AsyncSession, *, order_id: uuid.UUID, error: str
-) -> None:
-    async with session.begin():
-        charge = await session.scalar(
-            select(PaymentCharge)
-            .where(PaymentCharge.order_id == order_id)
-            .with_for_update()
-        )
-        if charge is not None and charge.status == PaymentStatus.REFUND_PENDING:
-            charge.refund_last_error = error[:1000]
 
 
 async def fulfill_payment_exception(
@@ -230,9 +218,20 @@ async def prepare_star_refund(
                 telegram_payment_charge_id=charge.telegram_payment_charge_id,
                 already_refunded=True,
             )
+        if charge.status == PaymentStatus.REFUND_UNKNOWN:
+            raise PaymentExceptionError("退款结果未知，必须人工对账，禁止自动重试")
+        if charge.status == PaymentStatus.REFUND_PENDING:
+            if charge.refund_lease_expires_at and charge.refund_lease_expires_at <= now:
+                charge.status = PaymentStatus.REFUND_UNKNOWN
+                charge.refund_claim_token = None
+                charge.refund_claimed_at = None
+                charge.refund_lease_expires_at = None
+                charge.refund_last_error = "refund lease expired; result unknown"
+                raise PaymentExceptionError("上次退款结果未知，已转入人工对账")
+            raise PaymentExceptionError("该退款正在由其他操作处理")
         if order.status == OrderStatus.FULFILLED:
             raise PaymentExceptionError("订单已交付，禁止自动退款")
-        if order.status not in {OrderStatus.PAYMENT_EXCEPTION, OrderStatus.REFUND_PENDING}:
+        if order.status != OrderStatus.PAYMENT_EXCEPTION:
             raise PaymentExceptionError(f"当前订单状态不可退款：{order.status.value}")
         delivered_card = await session.scalar(
             select(Card.id)
@@ -241,6 +240,7 @@ async def prepare_star_refund(
         )
         if delivered_card:
             raise PaymentExceptionError("卡密已交付，禁止自动退款")
+        claim_token = uuid.uuid4()
         order.status = OrderStatus.REFUND_PENDING
         charge.status = PaymentStatus.REFUND_PENDING
         charge.refund_requested_at = charge.refund_requested_at or now
@@ -248,10 +248,14 @@ async def prepare_star_refund(
         charge.refund_attempts += 1
         charge.refund_last_error = None
         charge.refund_requested_by_telegram_id = admin_telegram_user_id
+        charge.refund_claim_token = claim_token
+        charge.refund_claimed_at = now
+        charge.refund_lease_expires_at = now + timedelta(minutes=2)
         return RefundRequest(
             order_id=order.id,
             telegram_user_id=user.telegram_user_id,
             telegram_payment_charge_id=charge.telegram_payment_charge_id,
+            claim_token=claim_token,
         )
 
 
@@ -260,6 +264,7 @@ async def finish_star_refund(
     *,
     order_id: uuid.UUID,
     admin_telegram_user_id: int,
+    claim_token: uuid.UUID,
     success: bool,
     error: str | None = None,
 ) -> None:
@@ -276,15 +281,19 @@ async def finish_star_refund(
         if row is None:
             raise PaymentExceptionError("订单不存在")
         order, charge = row
+        if charge.refund_claim_token != claim_token:
+            raise PaymentExceptionError("退款租约已失效，拒绝写入结果")
         if success:
             order.status = OrderStatus.REFUNDED
             order.resolved_at = now
             order.resolved_by_telegram_id = admin_telegram_user_id
-            order.resolution_action = "refund"
+            order.resolution_action = "refund_api"
             charge.status = PaymentStatus.REFUNDED
             charge.refunded_at = now
             charge.refund_last_error = None
         else:
-            order.status = OrderStatus.PAYMENT_EXCEPTION
-            charge.status = PaymentStatus.REFUND_FAILED
-            charge.refund_last_error = (error or "unknown refund error")[:1000]
+            charge.status = PaymentStatus.REFUND_UNKNOWN
+            charge.refund_last_error = (error or "unknown refund result")[:1000]
+        charge.refund_claim_token = None
+        charge.refund_claimed_at = None
+        charge.refund_lease_expires_at = None

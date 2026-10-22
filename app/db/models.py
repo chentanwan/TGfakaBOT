@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import (
@@ -187,6 +187,8 @@ class PaymentCharge(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("orders.id"))
+    related_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("orders.id"))
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger)
     telegram_payment_charge_id: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False
     )
@@ -207,6 +209,9 @@ class PaymentCharge(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     refund_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     refund_last_error: Mapped[str | None] = mapped_column(Text)
     refund_requested_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    refund_claim_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    refund_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refund_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class FulfillmentJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):

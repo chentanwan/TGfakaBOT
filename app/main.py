@@ -8,7 +8,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
-from app.handlers import admin, catalog, payment_admin
+from app.handlers import admin, catalog, charge_admin, payment_admin
 from app.services.cleanup import cleanup_loop
 
 
@@ -23,6 +23,7 @@ async def main() -> None:
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=storage)
     dispatcher.include_router(admin.router)
+    dispatcher.include_router(charge_admin.router)
     dispatcher.include_router(payment_admin.router)
     dispatcher.include_router(catalog.router)
     # Never drop queued updates: a pending successful_payment is a financial event.

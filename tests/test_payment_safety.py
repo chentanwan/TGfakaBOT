@@ -25,6 +25,7 @@ def test_duplicate_payment_does_not_repeat_secret() -> None:
     assert "未重复发送卡密" in source
 
 
-def test_cleanup_only_releases_unapproved_precheckout_orders() -> None:
+def test_cleanup_reclaims_expired_processing_orders_without_charge() -> None:
     source = Path("app/services/cleanup.py").read_text()
-    assert "Order.precheckout_approved_at.is_(None)" in source
+    assert "OrderStatus.PAYMENT_PROCESSING" in source
+    assert "select(PaymentCharge.id)" in source

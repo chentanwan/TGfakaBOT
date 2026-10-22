@@ -65,6 +65,7 @@ class PaymentStatus(str, enum.Enum):
     REFUND_PENDING = "refund_pending"
     REFUNDED = "refunded"
     REFUND_FAILED = "refund_failed"
+    REFUND_UNKNOWN = "refund_unknown"
 
 
 class FulfillmentJobStatus(str, enum.Enum):

@@ -15,7 +15,6 @@ from app.services.payment_exceptions import (
     list_payment_exceptions,
     list_refund_pending,
     prepare_star_refund,
-    record_refund_uncertain,
 )
 
 router = Router(name="payment-admin")
@@ -195,6 +194,7 @@ async def _execute_delivery(
 
 
 async def _execute_refund(callback: CallbackQuery, order_id: uuid.UUID) -> None:
+    request = None
     try:
         async with SessionFactory() as session:
             request = await prepare_star_refund(
@@ -213,19 +213,30 @@ async def _execute_refund(callback: CallbackQuery, order_id: uuid.UUID) -> None:
         await callback.message.edit_text(f"❌ {html.escape(str(exc))}")
         return
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"
-        async with SessionFactory() as session:
-            await record_refund_uncertain(session, order_id=order_id, error=error)
+        if request is not None and request.claim_token is not None:
+            async with SessionFactory() as session:
+                await finish_star_refund(
+                    session,
+                    order_id=order_id,
+                    admin_telegram_user_id=callback.from_user.id,
+                    claim_token=request.claim_token,
+                    success=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
         await callback.message.edit_text(
-            "⚠️ 退款 API 返回结果不确定，订单保持退款处理中。\n"
+            "⚠️ 退款 API 返回结果不确定，已隔离并等待人工对账。\n"
             f"错误：<code>{html.escape(type(exc).__name__)}</code>"
         )
+        return
+    if request.claim_token is None:
+        await callback.message.edit_text("❌ 退款租约缺失，请人工检查。")
         return
     async with SessionFactory() as session:
         await finish_star_refund(
             session,
             order_id=order_id,
             admin_telegram_user_id=callback.from_user.id,
+            claim_token=request.claim_token,
             success=True,
         )
     await callback.message.edit_text("✅ Telegram Stars 退款成功。")

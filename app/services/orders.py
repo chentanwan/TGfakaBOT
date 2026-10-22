@@ -262,6 +262,7 @@ async def settle_payment(
             .values(
                 telegram_payment_charge_id=telegram_payment_charge_id,
                 provider_payment_charge_id=provider_payment_charge_id,
+                telegram_user_id=telegram_user_id,
                 invoice_payload=invoice_payload,
                 currency=currency,
                 total_amount=total_amount,
@@ -317,6 +318,7 @@ async def settle_payment(
                     )
                 )
                 if other_charge is not None:
+                    charge.related_order_id = order.id
                     charge.resolution_status = "conflict"
                     pending_error = "检测到订单重复扣款，已保留流水等待退款处理"
                 elif (
@@ -324,6 +326,7 @@ async def settle_payment(
                     or currency != "XTR"
                     or total_amount != order.total_amount
                 ):
+                    charge.related_order_id = order.id
                     charge.resolution_status = "conflict"
                     pending_error = "付款已记录，但订单校验异常，请联系客服"
                 else:

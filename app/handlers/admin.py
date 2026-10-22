@@ -36,6 +36,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📦 商品与库存", callback_data="adm:list")],
             [InlineKeyboardButton(text="⚠️ 支付异常", callback_data="adm:pex:list")],
             [InlineKeyboardButton(text="⏳ 退款处理中", callback_data="adm:refunds:pending")],
+            [InlineKeyboardButton(text="🧾 孤立支付流水", callback_data="adm:charges:list")],
         ]
     )
 
