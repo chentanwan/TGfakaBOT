@@ -392,7 +392,9 @@ async def _delivered_order(
     )
 
 
-async def list_user_orders(session: AsyncSession, telegram_user_id: int) -> list[DeliveredOrder]:
+async def list_user_orders(
+    session: AsyncSession, telegram_user_id: int, *, offset: int = 0, limit: int = 5
+) -> list[DeliveredOrder]:
     rows = (
         await session.execute(
             select(Order, OrderItem, Card)
@@ -401,7 +403,8 @@ async def list_user_orders(session: AsyncSession, telegram_user_id: int) -> list
             .outerjoin(Card, Card.order_item_id == OrderItem.id)
             .where(User.telegram_user_id == telegram_user_id)
             .order_by(Order.created_at.desc())
-            .limit(20)
+            .offset(offset)
+            .limit(limit)
         )
     ).all()
     return [

@@ -12,6 +12,7 @@ from aiogram.types import (
     PreCheckoutQuery,
 )
 
+from app.core.config import get_settings
 from app.db.session import SessionFactory
 from app.services.orders import (
     ShopError,
@@ -24,6 +25,8 @@ from app.services.orders import (
 )
 
 router = Router(name="catalog")
+settings = get_settings()
+ORDERS_PAGE_SIZE = 5
 
 
 def _shop_keyboard(products: list) -> InlineKeyboardMarkup:
@@ -58,17 +61,34 @@ async def show_shop(message: Message) -> None:
 @router.callback_query(F.data == "my_orders")
 async def callback_orders(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_orders(callback.message, callback.from_user.id)
+    await send_orders(callback.message, callback.from_user.id, page=0)
+
+
+@router.callback_query(F.data.startswith("orders:"))
+async def callback_orders_page(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        page = max(0, int(callback.data.split(":", 1)[1]))
+    except (ValueError, IndexError):
+        page = 0
+    await send_orders(callback.message, callback.from_user.id, page=page)
 
 
 @router.message(Command("orders"))
 async def command_orders(message: Message) -> None:
-    await send_orders(message, message.from_user.id)
+    await send_orders(message, message.from_user.id, page=0)
 
 
-async def send_orders(target: Message, telegram_user_id: int) -> None:
+async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> None:
     async with SessionFactory() as session:
-        orders = await list_user_orders(session, telegram_user_id)
+        orders = await list_user_orders(
+            session,
+            telegram_user_id,
+            offset=page * ORDERS_PAGE_SIZE,
+            limit=ORDERS_PAGE_SIZE + 1,
+        )
+    has_next = len(orders) > ORDERS_PAGE_SIZE
+    orders = orders[:ORDERS_PAGE_SIZE]
     if not orders:
         await target.answer("📦 暂无订单。")
         return
@@ -82,7 +102,36 @@ async def send_orders(target: Message, telegram_user_id: int) -> None:
         if order.secret:
             text += f"\n卡密：<code>{html.escape(order.secret)}</code>"
         blocks.append(text)
-    await target.answer("📦 <b>我的订单</b>\n\n" + "\n\n".join(blocks))
+    rows = []
+    if page > 0:
+        rows.append(InlineKeyboardButton(text="⬅️ 上一页", callback_data=f"orders:{page - 1}"))
+    if has_next:
+        rows.append(InlineKeyboardButton(text="下一页 ➡️", callback_data=f"orders:{page + 1}"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[rows]) if rows else None
+    await target.answer(
+        f"📦 <b>我的订单 · 第 {page + 1} 页</b>\n\n" + "\n\n".join(blocks),
+        reply_markup=keyboard,
+    )
+
+
+@router.message(Command("terms"))
+async def terms(message: Message) -> None:
+    await message.answer(
+        "<b>购买条款</b>\n\n"
+        "数字商品付款后自动交付。请在付款前确认商品信息；卡密一经展示，除法律要求或商品无效外不支持退款。"
+        "如发生扣款但未交付，请使用 /paysupport 联系支持。"
+    )
+
+
+@router.message(Command("support"))
+@router.message(Command("paysupport"))
+async def support(message: Message) -> None:
+    contact = settings.support_url or "https://t.me/cclchat_bot"
+    await message.answer(
+        "<b>支付与订单支持</b>\n\n"
+        f"请联系：<a href=\"{html.escape(contact, quote=True)}\">{html.escape(contact)}</a>\n"
+        "联系时请提供订单号，不要发送完整卡密。"
+    )
 
 
 @router.callback_query(F.data.startswith("buy:"))
