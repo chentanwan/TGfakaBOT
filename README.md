@@ -147,6 +147,9 @@ alembic revision --autogenerate -m "describe change"
 - Refund API timeouts move to `refund_unknown`; automatic retries are blocked until manual reconciliation.
 - Unmatched and duplicate/conflict payment charges appear in a charge-centric admin queue.
 - Refund calls use database claim tokens and leases to prevent concurrent duplicate API calls.
+- Unknown refund results require an evidence note and administrator reconciliation.
+- Payment receipts commit before order matching, so fulfillment failures cannot erase financial records.
+- GitHub Actions runs Ruff, unit tests, Alembic migrations, and PostgreSQL/Redis integration tests.
 - Strict exactly-once Telegram message delivery is not possible; `/orders` remains the recovery path.
 - PostgreSQL/Redis test services and opt-in integration tests are provided in `docker-compose.test.yml`.
 - The bot health check verifies PostgreSQL and Redis; external Telegram polling monitoring is recommended.

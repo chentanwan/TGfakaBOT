@@ -31,7 +31,15 @@ async def release_expired_orders_once() -> int:
         ).all()
         for order in orders:
             paid = await session.scalar(
-                select(PaymentCharge.id).where(PaymentCharge.order_id == order.id)
+                select(PaymentCharge.id).where(
+                    (PaymentCharge.order_id == order.id)
+                    | (
+                        (PaymentCharge.order_id.is_(None))
+                        & (PaymentCharge.invoice_payload == order.invoice_payload)
+                        & (PaymentCharge.currency == order.currency)
+                        & (PaymentCharge.total_amount == order.total_amount)
+                    )
+                )
             )
             if paid:
                 continue

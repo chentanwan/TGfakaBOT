@@ -23,6 +23,7 @@ class OrphanChargeSummary:
     invoice_payload: str
     total_amount: int
     resolution_status: str
+    payment_status: str
     related_public_id: str | None
     received_at: datetime
 
@@ -60,6 +61,7 @@ async def list_orphan_charges(
             invoice_payload=charge.invoice_payload,
             total_amount=charge.total_amount,
             resolution_status=charge.resolution_status,
+            payment_status=charge.status.value,
             related_public_id=order.public_id if order else None,
             received_at=charge.received_at,
         )
@@ -146,7 +148,12 @@ async def finish_orphan_refund(
 
 
 async def resolve_orphan_refund(
-    session: AsyncSession, *, charge_id: uuid.UUID, refunded: bool
+    session: AsyncSession,
+    *,
+    charge_id: uuid.UUID,
+    refunded: bool,
+    admin_telegram_user_id: int,
+    evidence_note: str,
 ) -> None:
     async with session.begin():
         charge = await session.scalar(
@@ -154,6 +161,10 @@ async def resolve_orphan_refund(
         )
         if charge is None or charge.order_id is not None:
             raise ChargeExceptionError("孤立支付流水不存在")
+        if charge.status not in {PaymentStatus.REFUND_UNKNOWN, PaymentStatus.REFUND_PENDING}:
+            raise ChargeExceptionError("该流水当前不需要人工退款对账")
+        if not evidence_note.strip():
+            raise ChargeExceptionError("必须填写权威核验说明")
         if charge.refund_lease_expires_at and charge.refund_lease_expires_at > datetime.now(UTC):
             raise ChargeExceptionError("退款请求仍可能在途，暂不可人工处理")
         if refunded:
@@ -168,3 +179,6 @@ async def resolve_orphan_refund(
         charge.refund_claim_token = None
         charge.refund_claimed_at = None
         charge.refund_lease_expires_at = None
+        charge.resolved_at = datetime.now(UTC)
+        charge.resolved_by_telegram_id = admin_telegram_user_id
+        charge.resolution_note = evidence_note.strip()[:2000]

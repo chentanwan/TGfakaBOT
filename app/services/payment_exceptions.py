@@ -42,6 +42,7 @@ class RefundPendingSummary:
     telegram_user_id: int
     total_amount: int
     attempts: int
+    payment_status: str
     last_error: str
 
 
@@ -100,7 +101,9 @@ async def list_refund_pending(
             .join(PaymentCharge, PaymentCharge.order_id == Order.id)
             .where(
                 Order.status == OrderStatus.REFUND_PENDING,
-                PaymentCharge.status == PaymentStatus.REFUND_PENDING,
+                PaymentCharge.status.in_(
+                    [PaymentStatus.REFUND_PENDING, PaymentStatus.REFUND_UNKNOWN]
+                ),
             )
             .order_by(PaymentCharge.refund_requested_at)
             .limit(limit)
@@ -113,6 +116,7 @@ async def list_refund_pending(
             telegram_user_id=user.telegram_user_id,
             total_amount=order.total_amount,
             attempts=charge.refund_attempts,
+            payment_status=charge.status.value,
             last_error=charge.refund_last_error or "",
         )
         for order, user, charge in rows
@@ -297,3 +301,51 @@ async def finish_star_refund(
         charge.refund_claim_token = None
         charge.refund_claimed_at = None
         charge.refund_lease_expires_at = None
+
+async def reconcile_linked_refund(
+    session: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    refunded: bool,
+    admin_telegram_user_id: int,
+    evidence_note: str,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = (
+            await session.execute(
+                select(Order, PaymentCharge)
+                .join(PaymentCharge, PaymentCharge.order_id == Order.id)
+                .where(Order.id == order_id)
+                .with_for_update(of=(Order, PaymentCharge))
+            )
+        ).one_or_none()
+        if row is None:
+            raise PaymentExceptionError("订单或支付流水不存在")
+        order, charge = row
+        if charge.status != PaymentStatus.REFUND_UNKNOWN:
+            raise PaymentExceptionError("该退款当前不需要人工对账")
+        if not evidence_note.strip():
+            raise PaymentExceptionError("必须填写权威核验说明")
+        if charge.refund_lease_expires_at and charge.refund_lease_expires_at > now:
+            raise PaymentExceptionError("退款请求仍可能在途，暂不可人工处理")
+        charge.refund_claim_token = None
+        charge.refund_claimed_at = None
+        charge.refund_lease_expires_at = None
+        charge.resolved_at = now
+        charge.resolved_by_telegram_id = admin_telegram_user_id
+        charge.resolution_note = evidence_note.strip()[:2000]
+        order.resolved_at = now
+        order.resolved_by_telegram_id = admin_telegram_user_id
+        if refunded:
+            charge.status = PaymentStatus.REFUNDED
+            charge.refunded_at = charge.refunded_at or now
+            charge.refund_last_error = None
+            order.status = OrderStatus.REFUNDED
+            order.resolution_action = "authority_confirm_refunded"
+        else:
+            charge.status = PaymentStatus.REFUND_FAILED
+            charge.refunded_at = None
+            charge.refund_last_error = "authority confirmed refund was not executed"
+            order.status = OrderStatus.PAYMENT_EXCEPTION
+            order.resolution_action = "authority_confirm_not_refunded"

@@ -212,6 +212,9 @@ class PaymentCharge(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     refund_claim_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     refund_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     refund_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    resolution_note: Mapped[str | None] = mapped_column(Text)
 
 
 class FulfillmentJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -21,7 +21,8 @@ from app.services.orders import (
     get_user_order,
     list_products,
     list_user_orders,
-    settle_payment,
+    match_and_fulfill_payment,
+    submit_payment_receipt,
     validate_pre_checkout,
 )
 
@@ -157,7 +158,8 @@ async def privacy(message: Message) -> None:
         "<b>隐私说明</b>\n\n"
         "为完成订单、支付幂等、退款和客服处理，系统会保存 Telegram 用户 ID、用户名/显示名、"
         "订单与支付流水、支付 charge ID 及 Telegram 支付 payload。卡密在数据库中加密保存。\n\n"
-        "当您查看卡密时，消息会由 Telegram 保存；请勿向客服发送完整卡密，并可在确认保存后删除含密消息。"
+        "当您查看卡密时，消息会由 Telegram 保存；请勿向客服发送完整卡密，"
+        "并可在确认保存后删除含密消息。"
         "支付及订单记录会按运营和法定留存要求保存。删除或数据问题请使用 /support 联系。"
     )
 
@@ -226,9 +228,9 @@ async def pre_checkout(query: PreCheckoutQuery) -> None:
 @router.message(F.successful_payment)
 async def successful_payment(message: Message) -> None:
     payment = message.successful_payment
-    async with SessionFactory() as session:
-        try:
-            delivered = await settle_payment(
+    try:
+        async with SessionFactory() as session:
+            receipt = await submit_payment_receipt(
                 session,
                 telegram_user_id=message.from_user.id,
                 invoice_payload=payment.invoice_payload,
@@ -238,9 +240,16 @@ async def successful_payment(message: Message) -> None:
                 provider_payment_charge_id=payment.provider_payment_charge_id,
                 raw_payload=payment.model_dump(mode="json"),
             )
-        except ShopError as exc:
-            await message.answer(f"⚠️ {html.escape(str(exc))}")
-            return
+        async with SessionFactory() as session:
+            delivered = await match_and_fulfill_payment(
+                session, charge_id=receipt.charge_id
+            )
+    except ShopError as exc:
+        await message.answer(f"⚠️ {html.escape(str(exc))}")
+        return
+    except Exception:
+        await message.answer("⚠️ 支付流水已记录，订单正在人工处理中，请联系客服。")
+        return
     if not delivered.should_deliver:
         await message.answer(
             "✅ 该支付此前已经处理，未重复发送卡密。可通过 /orders 查看订单。"

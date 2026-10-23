@@ -2,7 +2,9 @@ import html
 import uuid
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
@@ -15,11 +17,16 @@ from app.services.payment_exceptions import (
     list_payment_exceptions,
     list_refund_pending,
     prepare_star_refund,
+    reconcile_linked_refund,
 )
 
 router = Router(name="payment-admin")
 settings = get_settings()
 ACTION_LABELS = {"r": "补发已有卡", "n": "分配新卡", "f": "Stars 退款"}
+
+
+class ReconcileLinkedRefund(StatesGroup):
+    evidence = State()
 
 
 def _is_admin(user_id: int) -> bool:
@@ -74,14 +81,30 @@ async def refund_pending_list(callback: CallbackQuery) -> None:
     if not pending:
         await callback.message.answer("✅ 当前没有退款处理中的订单。")
         return
-    lines = ["⏳ <b>退款处理中</b>"]
+    lines = ["⏳ <b>退款处理中与待对账</b>"]
+    rows = []
     for item in pending:
         error = html.escape(item.last_error or "暂无错误")
         lines.append(
             f"\n<code>{item.public_id}</code> · 用户 <code>{item.telegram_user_id}</code>"
-            f" · ⭐ {item.total_amount}\n尝试 {item.attempts} 次 · {error}"
+            f" · ⭐ {item.total_amount} · {item.payment_status}"
+            f"\n尝试 {item.attempts} 次 · {error}"
         )
-    await callback.message.answer("\n".join(lines))
+        if item.payment_status == "refund_unknown":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="✅ 确认已退款",
+                        callback_data=f"adm:linked:reconcile:y:{item.order_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="🚫 确认未退款",
+                        callback_data=f"adm:linked:reconcile:n:{item.order_id}",
+                    ),
+                ]
+            )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    await callback.message.answer("\n".join(lines), reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("adm:pex:ask:"))
@@ -240,3 +263,51 @@ async def _execute_refund(callback: CallbackQuery, order_id: uuid.UUID) -> None:
             success=True,
         )
     await callback.message.edit_text("✅ Telegram Stars 退款成功。")
+
+
+@router.callback_query(F.data.startswith("adm:linked:reconcile:"))
+async def start_linked_reconcile(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    try:
+        _, _, _, verdict, raw_order_id = callback.data.split(":", 4)
+        order_id = uuid.UUID(raw_order_id)
+        if verdict not in {"y", "n"}:
+            raise ValueError
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    await state.set_state(ReconcileLinkedRefund.evidence)
+    await state.update_data(order_id=str(order_id), verdict=verdict)
+    await callback.answer()
+    await callback.message.answer(
+        "请输入权威核验依据（交易时间、流水尾号或客服工单）。说明将写入审计记录。"
+    )
+
+
+@router.message(ReconcileLinkedRefund.evidence)
+async def finish_linked_reconcile(message: Message, state: FSMContext) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    evidence = (message.text or "").strip()
+    if len(evidence) < 6:
+        await message.answer("核验说明过短，请提供至少 6 个字符。")
+        return
+    data = await state.get_data()
+    try:
+        order_id = uuid.UUID(data["order_id"])
+        async with SessionFactory() as session:
+            await reconcile_linked_refund(
+                session,
+                order_id=order_id,
+                refunded=data["verdict"] == "y",
+                admin_telegram_user_id=message.from_user.id,
+                evidence_note=evidence,
+            )
+    except (ValueError, PaymentExceptionError) as exc:
+        await message.answer(f"❌ {html.escape(str(exc))}")
+        return
+    await state.clear()
+    verdict_text = "已退款" if data["verdict"] == "y" else "权威确认未退款"
+    await message.answer(f"✅ 订单退款已标记为：{verdict_text}。")

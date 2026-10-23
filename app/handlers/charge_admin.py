@@ -2,7 +2,9 @@ import html
 import uuid
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
@@ -13,10 +15,15 @@ from app.services.charge_exceptions import (
     claim_orphan_refund,
     finish_orphan_refund,
     list_orphan_charges,
+    resolve_orphan_refund,
 )
 
 router = Router(name="charge-admin")
 settings = get_settings()
+
+
+class ReconcileCharge(StatesGroup):
+    evidence = State()
 
 
 def _is_admin(user_id: int) -> bool:
@@ -41,10 +48,24 @@ async def orphan_charge_list(callback: CallbackQuery) -> None:
         related = charge.related_public_id or "未匹配"
         lines.append(
             f"\n<code>{str(charge.charge_id)[:8]}</code> · {charge.resolution_status}"
+            f" / {charge.payment_status}"
             f" · ⭐ {charge.total_amount}\n付款用户：<code>{payer}</code>"
             f" · 候选订单：<code>{related}</code>"
         )
-        if charge.telegram_user_id:
+        if charge.payment_status == "refund_unknown":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="✅ 确认已退款",
+                        callback_data=f"adm:charge:reconcile:y:{charge.charge_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="🚫 确认未退款",
+                        callback_data=f"adm:charge:reconcile:n:{charge.charge_id}",
+                    ),
+                ]
+            )
+        elif charge.telegram_user_id:
             rows.append(
                 [
                     InlineKeyboardButton(
@@ -155,3 +176,51 @@ async def execute_orphan_refund(callback: CallbackQuery) -> None:
             success=True,
         )
     await callback.message.edit_text("✅ 孤立支付流水已退款。")
+
+
+@router.callback_query(F.data.startswith("adm:charge:reconcile:"))
+async def start_reconcile(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    try:
+        _, _, _, verdict, raw_charge_id = callback.data.split(":", 4)
+        charge_id = uuid.UUID(raw_charge_id)
+        if verdict not in {"y", "n"}:
+            raise ValueError
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    await state.set_state(ReconcileCharge.evidence)
+    await state.update_data(charge_id=str(charge_id), verdict=verdict)
+    await callback.answer()
+    await callback.message.answer(
+        "请输入权威核验依据（交易记录时间、流水尾号或客服工单）。该说明将写入审计记录。"
+    )
+
+
+@router.message(ReconcileCharge.evidence)
+async def finish_reconcile(message: Message, state: FSMContext) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    evidence = (message.text or "").strip()
+    if len(evidence) < 6:
+        await message.answer("核验说明过短，请提供至少 6 个字符。")
+        return
+    data = await state.get_data()
+    try:
+        charge_id = uuid.UUID(data["charge_id"])
+        async with SessionFactory() as session:
+            await resolve_orphan_refund(
+                session,
+                charge_id=charge_id,
+                refunded=data["verdict"] == "y",
+                admin_telegram_user_id=message.from_user.id,
+                evidence_note=evidence,
+            )
+    except (ValueError, ChargeExceptionError) as exc:
+        await message.answer(f"❌ {html.escape(str(exc))}")
+        return
+    await state.clear()
+    verdict_text = "已退款" if data["verdict"] == "y" else "权威确认未退款"
+    await message.answer(f"✅ 流水已标记为：{verdict_text}。")

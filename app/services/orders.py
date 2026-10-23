@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import card_vault
-from app.db.base import CardStatus, OrderStatus, ProductStatus
+from app.db.base import CardStatus, OrderStatus, PaymentStatus, ProductStatus
 from app.db.models import (
     SKU,
     Card,
@@ -43,6 +43,12 @@ class CreatedOrder:
     product_name: str
     description: str
     total_amount: int
+
+
+@dataclass(slots=True)
+class ReceiptRef:
+    charge_id: uuid.UUID
+    duplicate: bool
 
 
 @dataclass(slots=True)
@@ -242,7 +248,7 @@ async def validate_pre_checkout(
         return True, ""
 
 
-async def settle_payment(
+async def submit_payment_receipt(
     session: AsyncSession,
     *,
     telegram_user_id: int,
@@ -252,12 +258,10 @@ async def settle_payment(
     telegram_payment_charge_id: str,
     provider_payment_charge_id: str | None,
     raw_payload: dict,
-) -> DeliveredOrder:
+) -> ReceiptRef:
     now = datetime.now(UTC)
-    pending_error: str | None = None
-    result: DeliveredOrder | None = None
     async with session.begin():
-        await session.execute(
+        result = await session.execute(
             insert(PaymentCharge)
             .values(
                 telegram_payment_charge_id=telegram_payment_charge_id,
@@ -272,14 +276,31 @@ async def settle_payment(
                 received_at=now,
             )
             .on_conflict_do_nothing(index_elements=["telegram_payment_charge_id"])
+            .returning(PaymentCharge.id)
         )
+        inserted_id = result.scalar_one_or_none()
         charge = await session.scalar(
-            select(PaymentCharge)
-            .where(PaymentCharge.telegram_payment_charge_id == telegram_payment_charge_id)
-            .with_for_update()
+            select(PaymentCharge).where(
+                PaymentCharge.telegram_payment_charge_id == telegram_payment_charge_id
+            )
         )
         if charge is None:
             raise ShopError("支付流水保存失败，请联系客服")
+        return ReceiptRef(charge_id=charge.id, duplicate=inserted_id is None)
+
+
+async def match_and_fulfill_payment(
+    session: AsyncSession, *, charge_id: uuid.UUID
+) -> DeliveredOrder:
+    now = datetime.now(UTC)
+    pending_error: str | None = None
+    result: DeliveredOrder | None = None
+    async with session.begin():
+        charge = await session.scalar(
+            select(PaymentCharge).where(PaymentCharge.id == charge_id).with_for_update()
+        )
+        if charge is None:
+            raise ShopError("支付流水不存在，请联系客服")
         if charge.order_id is not None:
             linked_order = await session.scalar(
                 select(Order).where(Order.id == charge.order_id).with_for_update()
@@ -298,12 +319,16 @@ async def settle_payment(
                 pending_error = "该笔支付已经退款"
             else:
                 pending_error = "支付已记录，订单状态正在处理中"
+        elif charge.resolution_status != "unmatched":
+            pending_error = "支付流水已进入人工处理队列，请联系客服"
+        elif charge.status != PaymentStatus.SUCCEEDED:
+            pending_error = "支付流水正在退款或人工处理中"
         else:
             row = (
                 await session.execute(
                     select(Order, User)
                     .join(User, User.id == Order.user_id)
-                    .where(Order.invoice_payload == invoice_payload)
+                    .where(Order.invoice_payload == charge.invoice_payload)
                     .with_for_update(of=Order)
                 )
             ).one_or_none()
@@ -322,9 +347,9 @@ async def settle_payment(
                     charge.resolution_status = "conflict"
                     pending_error = "检测到订单重复扣款，已保留流水等待退款处理"
                 elif (
-                    user.telegram_user_id != telegram_user_id
-                    or currency != "XTR"
-                    or total_amount != order.total_amount
+                    user.telegram_user_id != charge.telegram_user_id
+                    or charge.currency != "XTR"
+                    or charge.total_amount != order.total_amount
                 ):
                     charge.related_order_id = order.id
                     charge.resolution_status = "conflict"
@@ -366,12 +391,35 @@ async def settle_payment(
                                 total_amount=order.total_amount,
                                 secret=secret,
                             )
-
     if pending_error:
         raise ShopError(pending_error)
     if result is None:
         raise ShopError("支付已记录，但订单处理结果异常，请联系客服")
     return result
+
+
+async def settle_payment(
+    session: AsyncSession,
+    *,
+    telegram_user_id: int,
+    invoice_payload: str,
+    currency: str,
+    total_amount: int,
+    telegram_payment_charge_id: str,
+    provider_payment_charge_id: str | None,
+    raw_payload: dict,
+) -> DeliveredOrder:
+    receipt = await submit_payment_receipt(
+        session,
+        telegram_user_id=telegram_user_id,
+        invoice_payload=invoice_payload,
+        currency=currency,
+        total_amount=total_amount,
+        telegram_payment_charge_id=telegram_payment_charge_id,
+        provider_payment_charge_id=provider_payment_charge_id,
+        raw_payload=raw_payload,
+    )
+    return await match_and_fulfill_payment(session, charge_id=receipt.charge_id)
 
 
 async def _delivered_order(
