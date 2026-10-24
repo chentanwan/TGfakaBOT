@@ -70,6 +70,7 @@ class Product(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("categories.id"))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    description_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[ProductStatus] = enum_column(
         ProductStatus, "product_status", ProductStatus.DRAFT
     )

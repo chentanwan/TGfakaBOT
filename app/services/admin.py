@@ -20,7 +20,12 @@ class AdminProduct:
 
 
 async def create_product(
-    session: AsyncSession, *, name: str, description: str, price_xtr: int
+    session: AsyncSession,
+    *,
+    name: str,
+    description: str,
+    description_html: str,
+    price_xtr: int,
 ) -> Product:
     if price_xtr < 1:
         raise ValueError("Stars 价格必须为正整数")
@@ -28,6 +33,7 @@ async def create_product(
         product = Product(
             name=name.strip(),
             description=description.strip(),
+            description_html=description_html.strip(),
             status=ProductStatus.ACTIVE,
         )
         session.add(product)

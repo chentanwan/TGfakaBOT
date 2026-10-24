@@ -18,6 +18,7 @@ from app.services.orders import (
     ShopError,
     cancel_unpaid_order,
     create_order,
+    get_product,
     get_user_order,
     list_products,
     list_user_orders,
@@ -176,6 +177,36 @@ async def support(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("buy:"))
+async def show_product(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        product_id = uuid.UUID(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.message.answer("无效商品。")
+        return
+    async with SessionFactory() as session:
+        product = await get_product(session, product_id)
+    if product is None or product.stock < 1:
+        await callback.message.answer("商品不存在或暂时无库存。")
+        return
+    await callback.message.answer(
+        f"<b>{html.escape(product.name)}</b>\n"
+        f"⭐ {product.price_xtr} · 库存 {product.stock}\n\n"
+        f"{product.description_html}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"⭐ {product.price_xtr} 立即购买",
+                        callback_data=f"pay:{product.id}",
+                    )
+                ]
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("pay:"))
 async def buy_product(callback: CallbackQuery) -> None:
     await callback.answer()
     try:

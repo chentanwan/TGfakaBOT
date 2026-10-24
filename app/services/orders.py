@@ -1,3 +1,4 @@
+import html
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ class CatalogProduct:
     id: uuid.UUID
     name: str
     description: str
+    description_html: str
     price_xtr: int
     stock: int
 
@@ -105,6 +107,7 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             id=product.id,
             name=product.name,
             description=product.description,
+            description_html=product.description_html or html.escape(product.description),
             price_xtr=sku.price_xtr,
             stock=int(stock),
         )
