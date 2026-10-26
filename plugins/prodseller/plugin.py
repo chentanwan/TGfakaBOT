@@ -50,6 +50,7 @@ class ProdsellerPlugin:
         self.router.message.register(self._finish_import, ImportProduct.external_id)
         self._bot: Bot | None = None
         self._poll_task: asyncio.Task | None = None
+        self._sync_task: asyncio.Task | None = None
 
     def catalog_button(self, product: PluginProduct) -> InlineKeyboardButton | None:
         return None
@@ -77,11 +78,14 @@ class ProdsellerPlugin:
     async def startup(self, bot: Bot) -> None:
         self._bot = bot
         self._poll_task = asyncio.create_task(self._poll_pending_orders())
+        self._sync_task = asyncio.create_task(self._sync_products_loop())
 
     async def shutdown(self) -> None:
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            await asyncio.gather(self._poll_task, return_exceptions=True)
+        tasks = [task for task in (self._poll_task, self._sync_task) if task is not None]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def register_http_routes(self, app: web.Application, bot: Bot) -> None:
         return None
@@ -159,13 +163,25 @@ class ProdsellerPlugin:
             )
         return True
 
+    async def _sync_products_loop(self) -> None:
+        while True:
+            try:
+                products = await self.client.list_products()
+                updated = await self._sync_existing(products)
+                logger.info("ProdSeller automatic product sync updated %s mappings", updated)
+            except Exception:
+                logger.exception("ProdSeller automatic product sync failed")
+            await asyncio.sleep(
+                max(1, self.settings.prodseller_product_sync_minutes) * 60
+            )
+
     async def _poll_pending_orders(self) -> None:
         while True:
             try:
                 await self._poll_pending_once()
             except Exception:
                 logger.exception("ProdSeller pending-order poll failed")
-            await asyncio.sleep(max(10, self.settings.prodseller_poll_seconds))
+            await asyncio.sleep(max(10, self.settings.prodseller_order_poll_seconds))
 
     async def _poll_pending_once(self) -> None:
         from app.db.models import SupplierOrder
@@ -385,8 +401,10 @@ class ProdsellerPlugin:
             )
 
     def _sale_price(self, cost_minor: int) -> int:
-        multiplier = Decimal(100 + self.settings.prodseller_sale_markup_percent) / Decimal(100)
-        return int((Decimal(cost_minor) * multiplier).to_integral_value(rounding=ROUND_CEILING))
+        multiplier = (Decimal(100) + self.settings.prodseller_profit_percent) / Decimal(100)
+        fixed_minor = self.settings.prodseller_profit_fixed * Decimal(100)
+        sale = Decimal(cost_minor) * multiplier + fixed_minor
+        return int(sale.to_integral_value(rounding=ROUND_CEILING))
 
     @staticmethod
     def _minor(amount: Decimal) -> int:

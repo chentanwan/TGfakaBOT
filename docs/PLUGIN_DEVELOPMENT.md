@@ -22,3 +22,6 @@ Security rules:
 
 
 Supplier plugins map external products through the core `supplier_products` table and purchases through `supplier_orders`. They must use stable upstream idempotency keys and route delivered secrets through `app.services.supplier_fulfillment`; raw supplier secrets must not be stored in plugin logs or plaintext metadata.
+
+
+Every supplier plugin must define its own prefixed profit and synchronization settings. The standard pricing formula is `upstream cost + percentage profit + fixed profit`, rounded up to the currency minor unit. Product catalog synchronization defaults to 60 minutes and must be separate from pending-order delivery polling.

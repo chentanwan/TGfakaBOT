@@ -194,3 +194,5 @@ Admin workflow:
 5. Review and enable the BEpusdt price before selling. **Sync upstream** refreshes cost and stock for imported products.
 
 After a successful customer payment, the supplier purchase uses `Idempotency-Key: tgfakabot-<public order id>`. Instant keys are encrypted into the normal card vault before delivery. Products requiring customer email activation are intentionally rejected until a dedicated customer-email consent flow exists.
+
+Each supplier plugin owns independent pricing and synchronization variables. ProdSeller calculates the suggested USD sale price as `cost + percentage profit + fixed USD profit`, using `PRODSELLER_PROFIT_PERCENT` and `PRODSELLER_PROFIT_FIXED`. Its product catalog automatically refreshes every `PRODSELLER_PRODUCT_SYNC_MINUTES` minutes (default 60); pending fulfillment polling remains independently configured with `PRODSELLER_ORDER_POLL_SECONDS`.
