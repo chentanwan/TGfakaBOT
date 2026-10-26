@@ -144,7 +144,6 @@ alembic revision --autogenerate -m "describe change"
 - Payment exceptions can be fulfilled with a reserved/new card or refunded from the admin panel.
 - Dangerous admin actions use Redis-backed, single-use confirmation tokens.
 - `/orders` is paginated; `/terms`, `/support`, and `/paysupport` support Stars users.
-- Product descriptions preserve Telegram editor formatting (bold, italic, underline, spoiler, and links) on the product detail page.
 - Refund API timeouts move to `refund_unknown`; automatic retries are blocked until manual reconciliation.
 - Unmatched and duplicate/conflict payment charges appear in a charge-centric admin queue.
 - Refund calls use database claim tokens and leases to prevent concurrent duplicate API calls.

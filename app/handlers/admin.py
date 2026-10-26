@@ -81,13 +81,10 @@ async def new_product_name(message: Message, state: FSMContext) -> None:
 @router.message(NewProduct.description)
 async def new_product_description(message: Message, state: FSMContext) -> None:
     description = (message.text or "").strip()
-    description_html = (message.html_text or description).strip()
     if len(description) > 3000:
         await message.answer("描述不能超过 3000 字符。")
         return
-    await state.update_data(
-        description=description, description_html=description_html
-    )
+    await state.update_data(description=description)
     await state.set_state(NewProduct.price)
     await message.answer("请输入 Stars 整数价格，例如 50：")
 
@@ -107,7 +104,6 @@ async def new_product_price(message: Message, state: FSMContext) -> None:
             session,
             name=data["name"],
             description=data["description"],
-            description_html=data["description_html"],
             price_xtr=price,
         )
     await state.clear()
