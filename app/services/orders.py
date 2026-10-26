@@ -18,6 +18,7 @@ from app.db.models import (
     PaymentCharge,
     Product,
     ProductPrice,
+    SupplierProduct,
     User,
 )
 
@@ -35,6 +36,7 @@ class CatalogProduct:
     description: str
     price_xtr: int
     plugin_prices: dict[str, tuple[str, int]]
+    supplier_stock: bool
     stock: int
 
 
@@ -64,6 +66,8 @@ class DeliveredOrder:
     secret: str
     duplicate: bool = False
     should_deliver: bool = True
+    needs_supplier: bool = False
+    order_id: uuid.UUID | None = None
 
 
 async def ensure_user(
@@ -113,6 +117,14 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             )
         )
     ).scalars().all() if sku_ids else []
+    supplier_rows = (
+        await session.execute(
+            select(SupplierProduct).where(
+                SupplierProduct.sku_id.in_(sku_ids), SupplierProduct.in_stock.is_(True)
+            )
+        )
+    ).scalars().all() if sku_ids else []
+    supplier_skus = {supplier.sku_id for supplier in supplier_rows}
     prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
     for price in price_rows:
         prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
@@ -126,6 +138,7 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             description=product.description,
             price_xtr=sku.price_xtr,
             plugin_prices=prices_by_sku.get(sku.id, {}),
+            supplier_stock=sku.id in supplier_skus,
             stock=int(stock),
         )
         for product, sku, stock in rows
@@ -171,10 +184,19 @@ async def create_order(
             .limit(1)
             .with_for_update(skip_locked=True)
         )
-        if card is None:
+        supplier = await session.scalar(
+            select(SupplierProduct).where(
+                SupplierProduct.sku_id == sku.id, SupplierProduct.in_stock.is_(True)
+            )
+        )
+        if card is None and supplier is None:
             raise ShopError("商品已售罄")
+        if card is None and supplier and supplier.requires_customer_email:
+            raise ShopError("该上游商品需要邮箱激活，当前购买流程暂不支持")
 
         if payment_provider == "telegram_stars":
+            if not sku.stars_enabled:
+                raise ShopError("该商品未启用 Stars 支付")
             currency = "XTR"
             total_amount = sku.price_xtr
         else:
@@ -213,9 +235,10 @@ async def create_order(
         )
         session.add(item)
         await session.flush()
-        card.status = CardStatus.RESERVED
-        card.order_item_id = item.id
-        card.reserved_until = expires_at
+        if card is not None:
+            card.status = CardStatus.RESERVED
+            card.order_item_id = item.id
+            card.reserved_until = expires_at
 
     return CreatedOrder(
         public_id=order.public_id,
@@ -407,7 +430,25 @@ async def match_and_fulfill_payment(
                     charge.order_id = order.id
                     charge.resolution_status = "linked"
                     order.paid_at = now
-                    if card is None or card.status != CardStatus.RESERVED:
+                    supplier = await session.scalar(
+                        select(SupplierProduct).where(
+                            SupplierProduct.sku_id == item.sku_id,
+                            SupplierProduct.in_stock.is_(True),
+                        )
+                    ) if item else None
+                    if card is None and supplier is not None:
+                        order.status = OrderStatus.PAID
+                        result = DeliveredOrder(
+                            public_id=order.public_id,
+                            product_name=item.product_name_snapshot,
+                            total_amount=order.total_amount,
+                            currency=order.currency,
+                            secret="",
+                            should_deliver=False,
+                            needs_supplier=True,
+                            order_id=order.id,
+                        )
+                    elif card is None or card.status != CardStatus.RESERVED:
                         order.status = OrderStatus.PAYMENT_EXCEPTION
                         order.payment_exception_reason = "reserved_card_missing_or_invalid"
                         pending_error = "支付成功，订单正在人工处理中，请联系客服"

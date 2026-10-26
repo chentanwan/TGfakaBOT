@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import card_vault
 from app.db.base import CardStatus, OrderStatus
-from app.db.models import Card, Order, OrderItem, PluginPayment, User
+from app.db.models import Card, Order, OrderItem, PluginPayment, SupplierProduct, User
 
 
 class PluginPaymentError(Exception):
@@ -22,6 +22,8 @@ class PluginDelivery:
     secret: str
     should_deliver: bool
     exception_message: str | None = None
+    needs_supplier: bool = False
+    order_id: uuid.UUID | None = None
 
 
 async def reserve_plugin_payment(
@@ -165,6 +167,22 @@ async def fulfill_plugin_payment(
             if item
             else None
         )
+        supplier = await session.scalar(
+            select(SupplierProduct).where(
+                SupplierProduct.sku_id == item.sku_id, SupplierProduct.in_stock.is_(True)
+            )
+        ) if item else None
+        if card is None and supplier is not None:
+            order.status = OrderStatus.PAID
+            return PluginDelivery(
+                user.telegram_user_id,
+                order.public_id,
+                item.product_name_snapshot,
+                "",
+                False,
+                needs_supplier=True,
+                order_id=order.id,
+            )
         if card is None or card.status != CardStatus.RESERVED:
             order.status = OrderStatus.PAYMENT_EXCEPTION
             order.payment_exception_reason = f"{provider}_reserved_card_missing_or_invalid"

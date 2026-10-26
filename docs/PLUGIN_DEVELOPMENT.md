@@ -19,3 +19,6 @@ Security rules:
 - Treat network timeouts during payment creation as ambiguous; do not silently create a second transaction.
 - Do not place wallet keys or API tokens in source control.
 - Expose callbacks through HTTPS and restrict direct access to the internal HTTP port.
+
+
+Supplier plugins map external products through the core `supplier_products` table and purchases through `supplier_orders`. They must use stable upstream idempotency keys and route delivered secrets through `app.services.supplier_fulfillment`; raw supplier secrets must not be stored in plugin logs or plaintext metadata.

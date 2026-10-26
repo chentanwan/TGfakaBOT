@@ -37,7 +37,7 @@ def _shop_keyboard(products: list) -> InlineKeyboardMarkup:
     rows = []
     registry = get_plugin_registry()
     for product in products:
-        if product.stock < 1:
+        if product.stock < 1 and not product.supplier_stock:
             continue
         rows.append(
             [
@@ -274,6 +274,15 @@ async def successful_payment(message: Message) -> None:
         return
     except Exception:
         await message.answer("⚠️ 支付流水已记录，订单正在人工处理中，请联系客服。")
+        return
+    if delivered.needs_supplier:
+        handled = False
+        for plugin in get_plugin_registry().plugins:
+            if await plugin.fulfill_paid_order(message.bot, delivered):
+                handled = True
+                break
+        if not handled:
+            await message.answer("⚠️ 支付成功，但上游供货插件不可用，请联系客服。")
         return
     if not delivered.should_deliver:
         await message.answer(

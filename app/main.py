@@ -35,12 +35,16 @@ async def main() -> None:
     # Never drop queued updates: a pending successful_payment is a financial event.
     await bot.delete_webhook(drop_pending_updates=False)
     plugin_http_runner = await start_plugin_http_server(bot, plugin_registry)
+    for plugin in plugin_registry.plugins:
+        await plugin.startup(bot)
     cleanup_task = asyncio.create_task(cleanup_loop(bot))
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
         cleanup_task.cancel()
         await asyncio.gather(cleanup_task, return_exceptions=True)
+        for plugin in reversed(plugin_registry.plugins):
+            await plugin.shutdown()
         if plugin_http_runner is not None:
             await plugin_http_runner.cleanup()
         await redis.aclose()

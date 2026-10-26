@@ -91,8 +91,26 @@ class SKU(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(120), default="Default", nullable=False)
     price_xtr: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    stars_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class SupplierProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "supplier_products"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_product_id"),
+        UniqueConstraint("sku_id", "provider"),
+    )
+
+    sku_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("skus.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    external_product_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    cost_currency: Mapped[str] = mapped_column(String(12), nullable=False)
+    cost_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    in_stock: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    requires_customer_email: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
 class ProductPrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -188,6 +206,25 @@ class Card(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     order_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("order_items.id"))
     reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SupplierOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "supplier_orders"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_order_id"),
+        Index("ix_supplier_orders_provider_status", "provider", "status"),
+    )
+
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("orders.id"), unique=True, nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    external_order_id: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    cost_currency: Mapped[str] = mapped_column(String(12), nullable=False)
+    cost_amount_minor: Mapped[int | None] = mapped_column(BigInteger)
+    response_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class PluginPayment(UUIDPrimaryKeyMixin, TimestampMixin, Base):

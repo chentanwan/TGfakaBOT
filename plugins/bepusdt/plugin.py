@@ -62,9 +62,21 @@ class BepusdtPlugin:
             callback_data=f"plugin:bepusdt:price:{product_id}",
         )
 
+    def admin_home_buttons(self) -> list[list[InlineKeyboardButton]]:
+        return []
+
+    async def startup(self, bot: Bot) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
     def register_http_routes(self, app: web.Application, bot: Bot) -> None:
         app["bepusdt_bot"] = bot
         app.router.add_post("/plugins/bepusdt/notify", self._notify)
+
+    async def fulfill_paid_order(self, bot: Bot, delivered) -> bool:
+        return False
 
     async def _start_price(self, callback: CallbackQuery, state: FSMContext) -> None:
         from app.core.config import get_settings
@@ -235,7 +247,21 @@ class BepusdtPlugin:
             logger.exception("BEpusdt callback persistence failed")
             return web.Response(status=500, text="retry")
         if delivery:
-            await self._notify_user(request.app["bepusdt_bot"], delivery)
+            if delivery.needs_supplier:
+                from app.plugins.registry import get_plugin_registry
+
+                handled = False
+                for plugin in get_plugin_registry().plugins:
+                    if await plugin.fulfill_paid_order(request.app["bepusdt_bot"], delivery):
+                        handled = True
+                        break
+                if not handled:
+                    await request.app["bepusdt_bot"].send_message(
+                        delivery.telegram_user_id,
+                        "⚠️ 支付成功，但上游供货插件不可用，请联系客服。",
+                    )
+            else:
+                await self._notify_user(request.app["bepusdt_bot"], delivery)
         return web.Response(text="ok")
 
     @staticmethod

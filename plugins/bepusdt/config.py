@@ -10,7 +10,7 @@ class BepusdtSettings(BaseSettings):
     bepusdt_api_token: str
     bepusdt_public_base_url: str
     bepusdt_trade_type: str = "usdt.trc20"
-    bepusdt_fiat: str = "CNY"
+    bepusdt_fiat: str = "USD"
     bepusdt_timeout_seconds: int = 900
 
 
