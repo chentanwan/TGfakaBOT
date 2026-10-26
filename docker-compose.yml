@@ -10,6 +10,8 @@ services:
       redis:
         condition: service_healthy
     command: ["sh", "-c", "alembic upgrade head && python -m app.main"]
+    ports:
+      - "${PLUGIN_HTTP_PORT:-8081}:${PLUGIN_HTTP_PORT:-8081}"
     healthcheck:
       test: ["CMD", "python", "-m", "app.health"]
       interval: 30s

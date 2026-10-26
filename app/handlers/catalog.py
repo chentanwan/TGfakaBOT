@@ -14,6 +14,8 @@ from aiogram.types import (
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory
+from app.plugins.base import PluginPrice, PluginProduct
+from app.plugins.registry import get_plugin_registry
 from app.services.orders import (
     ShopError,
     cancel_unpaid_order,
@@ -32,16 +34,34 @@ ORDERS_PAGE_SIZE = 5
 
 
 def _shop_keyboard(products: list) -> InlineKeyboardMarkup:
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{product.name} · ⭐ {product.price_xtr} · 库存 {product.stock}",
-                callback_data=f"buy:{product.id}",
-            )
+    rows = []
+    registry = get_plugin_registry()
+    for product in products:
+        if product.stock < 1:
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{product.name} · ⭐ {product.price_xtr} · 库存 {product.stock}",
+                    callback_data=f"buy:{product.id}",
+                )
+            ]
+        )
+        plugin_product = PluginProduct(
+            id=product.id,
+            name=product.name,
+            prices={
+                provider: PluginPrice(provider, currency, amount)
+                for provider, (currency, amount) in product.plugin_prices.items()
+            },
+        )
+        plugin_buttons = [
+            button
+            for plugin in registry.plugins
+            if (button := plugin.catalog_button(plugin_product)) is not None
         ]
-        for product in products
-        if product.stock > 0
-    ]
+        if plugin_buttons:
+            rows.append(plugin_buttons)
     rows.append([InlineKeyboardButton(text="📦 我的订单", callback_data="my_orders")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -55,7 +75,7 @@ async def show_shop(message: Message) -> None:
         await message.answer("🛍️ 商店暂时没有可购买的商品。")
         return
     await message.answer(
-        "<b>🛍️ TGfakaBOT 商店</b>\n\n选择商品后将使用 Telegram Stars 安全支付。",
+        "<b>🛍️ TGfakaBOT 商店</b>\n\n请选择商品及支付方式。",
         reply_markup=_shop_keyboard(products),
     )
 
@@ -97,10 +117,15 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
     blocks = []
     secret_rows = []
     for order in orders:
+        amount_text = (
+            f"⭐ {order.total_amount}"
+            if order.currency == "XTR"
+            else f"{order.total_amount / 100:.2f} {order.currency}"
+        )
         blocks.append(
             f"<b>{html.escape(order.product_name)}</b>\n"
             f"订单：<code>{order.public_id}</code>\n"
-            f"金额：⭐ {order.total_amount}"
+            f"金额：{amount_text}"
         )
         secret_rows.append(
             [

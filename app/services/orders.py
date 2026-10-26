@@ -17,6 +17,7 @@ from app.db.models import (
     OrderItem,
     PaymentCharge,
     Product,
+    ProductPrice,
     User,
 )
 
@@ -33,6 +34,7 @@ class CatalogProduct:
     name: str
     description: str
     price_xtr: int
+    plugin_prices: dict[str, tuple[str, int]]
     stock: int
 
 
@@ -43,6 +45,8 @@ class CreatedOrder:
     product_name: str
     description: str
     total_amount: int
+    currency: str
+    order_id: uuid.UUID
 
 
 @dataclass(slots=True)
@@ -56,6 +60,7 @@ class DeliveredOrder:
     public_id: str
     product_name: str
     total_amount: int
+    currency: str
     secret: str
     duplicate: bool = False
     should_deliver: bool = True
@@ -100,12 +105,27 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             .order_by(Product.created_at.desc())
         )
     ).all()
+    sku_ids = [sku.id for _, sku, _ in rows]
+    price_rows = (
+        await session.execute(
+            select(ProductPrice).where(
+                ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
+            )
+        )
+    ).scalars().all() if sku_ids else []
+    prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
+    for price in price_rows:
+        prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
+            price.currency,
+            price.amount_minor,
+        )
     return [
         CatalogProduct(
             id=product.id,
             name=product.name,
             description=product.description,
             price_xtr=sku.price_xtr,
+            plugin_prices=prices_by_sku.get(sku.id, {}),
             stock=int(stock),
         )
         for product, sku, stock in rows
@@ -123,6 +143,7 @@ async def create_order(
     username: str | None,
     display_name: str,
     product_id: uuid.UUID,
+    payment_provider: str = "telegram_stars",
 ) -> CreatedOrder:
     now = datetime.now(UTC)
     async with session.begin():
@@ -153,13 +174,29 @@ async def create_order(
         if card is None:
             raise ShopError("商品已售罄")
 
+        if payment_provider == "telegram_stars":
+            currency = "XTR"
+            total_amount = sku.price_xtr
+        else:
+            plugin_price = await session.scalar(
+                select(ProductPrice).where(
+                    ProductPrice.sku_id == sku.id,
+                    ProductPrice.provider == payment_provider,
+                    ProductPrice.is_active.is_(True),
+                )
+            )
+            if plugin_price is None:
+                raise ShopError("该商品暂不支持此支付方式")
+            currency = plugin_price.currency
+            total_amount = plugin_price.amount_minor
         expires_at = now + timedelta(minutes=settings.order_reservation_minutes)
         order = Order(
             public_id=f"TG{now:%y%m%d}{secrets.token_hex(3).upper()}",
             user_id=user.id,
             status=OrderStatus.PENDING_PAYMENT,
-            currency="XTR",
-            total_amount=sku.price_xtr,
+            payment_provider=payment_provider,
+            currency=currency,
+            total_amount=total_amount,
             invoice_payload=secrets.token_urlsafe(32),
             reservation_expires_at=expires_at,
         )
@@ -170,9 +207,9 @@ async def create_order(
             sku_id=sku.id,
             product_name_snapshot=product.name,
             sku_name_snapshot=sku.name,
-            unit_price=sku.price_xtr,
+            unit_price=total_amount,
             quantity=1,
-            line_total=sku.price_xtr,
+            line_total=total_amount,
         )
         session.add(item)
         await session.flush()
@@ -186,6 +223,8 @@ async def create_order(
         product_name=product.name,
         description=product.description or product.name,
         total_amount=order.total_amount,
+        currency=order.currency,
+        order_id=order.id,
     )
 
 
@@ -389,6 +428,7 @@ async def match_and_fulfill_payment(
                                 public_id=order.public_id,
                                 product_name=item.product_name_snapshot,
                                 total_amount=order.total_amount,
+                                currency=order.currency,
                                 secret=secret,
                             )
     if pending_error:
@@ -442,6 +482,7 @@ async def _delivered_order(
         public_id=order.public_id,
         product_name=item.product_name_snapshot,
         total_amount=order.total_amount,
+        currency=order.currency,
         secret=card_vault.decrypt(card.secret_ciphertext) if include_secret else "",
         duplicate=duplicate,
         should_deliver=include_secret,
@@ -470,6 +511,7 @@ async def get_user_order(
         public_id=order.public_id,
         product_name=item.product_name_snapshot,
         total_amount=order.total_amount,
+        currency=order.currency,
         secret=(
             card_vault.decrypt(card.secret_ciphertext)
             if card and order.status == OrderStatus.FULFILLED
@@ -498,6 +540,7 @@ async def list_user_orders(
             public_id=order.public_id,
             product_name=item.product_name_snapshot,
             total_amount=order.total_amount,
+            currency=order.currency,
             secret="",
         )
         for order, item, card in rows

@@ -95,10 +95,24 @@ class SKU(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class ProductPrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "product_prices"
+    __table_args__ = (
+        CheckConstraint("amount_minor >= 1", name="positive_amount_minor"),
+        UniqueConstraint("sku_id", "provider"),
+    )
+
+    sku_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("skus.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    currency: Mapped[str] = mapped_column(String(12), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class Order(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "orders"
     __table_args__ = (
-        CheckConstraint("currency = 'XTR'", name="currency_xtr"),
         CheckConstraint("total_amount >= 1", name="positive_total_amount"),
         Index("ix_orders_user_created", "user_id", "created_at"),
     )
@@ -108,7 +122,10 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[OrderStatus] = enum_column(
         OrderStatus, "order_status", OrderStatus.PENDING_PAYMENT
     )
-    currency: Mapped[str] = mapped_column(String(3), default="XTR", nullable=False)
+    payment_provider: Mapped[str] = mapped_column(
+        String(80), default="telegram_stars", nullable=False
+    )
+    currency: Mapped[str] = mapped_column(String(12), default="XTR", nullable=False)
     total_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
     invoice_payload: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     reservation_expires_at: Mapped[datetime] = mapped_column(
@@ -171,6 +188,31 @@ class Card(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     order_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("order_items.id"))
     reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PluginPayment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "plugin_payments"
+    __table_args__ = (
+        CheckConstraint("amount_minor >= 1", name="positive_amount_minor"),
+        UniqueConstraint("provider", "external_id"),
+        Index("ix_plugin_payments_provider_status", "provider", "status"),
+    )
+
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("orders.id"), unique=True, nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), default="creating", nullable=False)
+    currency: Mapped[str] = mapped_column(String(12), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checkout_url: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transaction_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    provider_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    last_event: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class PaymentCharge(UUIDPrimaryKeyMixin, TimestampMixin, Base):

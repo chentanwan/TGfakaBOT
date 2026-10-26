@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory
+from app.plugins.registry import get_plugin_registry
 from app.services.admin import create_product, import_cards, list_admin_products, toggle_product
 
 router = Router(name="admin")
@@ -133,12 +134,18 @@ async def admin_product_list(callback: CallbackQuery) -> None:
             f"\n{icon} <b>{html.escape(product.name)}</b> · "
             f"⭐ {product.price_xtr} · 库存 {product.available}"
         )
-        rows.append(
-            [
-                InlineKeyboardButton(text="导入卡密", callback_data=f"adm:cards:{product.id}"),
-                InlineKeyboardButton(text="启停", callback_data=f"adm:toggle:{product.id}"),
-            ]
-        )
+        product_buttons = [
+            InlineKeyboardButton(text="导入卡密", callback_data=f"adm:cards:{product.id}"),
+            InlineKeyboardButton(text="启停", callback_data=f"adm:toggle:{product.id}"),
+        ]
+        rows.append(product_buttons)
+        plugin_buttons = [
+            button
+            for plugin in get_plugin_registry().plugins
+            if (button := plugin.admin_product_button(product.id)) is not None
+        ]
+        if plugin_buttons:
+            rows.append(plugin_buttons)
     rows.append([InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new")])
     await callback.message.answer(
         "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)

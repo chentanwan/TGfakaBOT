@@ -1,0 +1,219 @@
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import card_vault
+from app.db.base import CardStatus, OrderStatus
+from app.db.models import Card, Order, OrderItem, PluginPayment, User
+
+
+class PluginPaymentError(Exception):
+    pass
+
+
+@dataclass(slots=True)
+class PluginDelivery:
+    telegram_user_id: int
+    public_id: str
+    product_name: str
+    secret: str
+    should_deliver: bool
+    exception_message: str | None = None
+
+
+async def reserve_plugin_payment(
+    session: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    provider: str,
+) -> PluginPayment:
+    async with session.begin():
+        order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
+        if order is None or order.payment_provider != provider:
+            raise PluginPaymentError("订单与支付插件不匹配")
+        if order.status != OrderStatus.PENDING_PAYMENT:
+            raise PluginPaymentError("订单已处理或失效")
+        payment = await session.scalar(
+            select(PluginPayment).where(PluginPayment.order_id == order.id).with_for_update()
+        )
+        if payment is None:
+            payment = PluginPayment(
+                order_id=order.id,
+                provider=provider,
+                status="creating",
+                currency=order.currency,
+                amount_minor=order.total_amount,
+            )
+            session.add(payment)
+            await session.flush()
+        return payment
+
+
+async def save_plugin_checkout(
+    session: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    provider: str,
+    external_id: str,
+    checkout_url: str,
+    expires_at,
+    provider_data: dict,
+) -> None:
+    async with session.begin():
+        payment = await session.scalar(
+            select(PluginPayment)
+            .where(PluginPayment.order_id == order_id, PluginPayment.provider == provider)
+            .with_for_update()
+        )
+        order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
+        if payment is None or order is None:
+            raise PluginPaymentError("插件支付记录不存在")
+        payment.external_id = external_id
+        payment.checkout_url = checkout_url
+        payment.expires_at = expires_at
+        payment.provider_data = provider_data
+        payment.status = "waiting"
+        payment.last_error = None
+        order.reservation_expires_at = expires_at
+        item_id = await session.scalar(select(OrderItem.id).where(OrderItem.order_id == order.id))
+        card = await session.scalar(
+            select(Card).where(Card.order_item_id == item_id).with_for_update()
+        )
+        if card and card.status == CardStatus.RESERVED:
+            card.reserved_until = expires_at
+
+
+async def record_plugin_payment_error(
+    session: AsyncSession, *, order_id: uuid.UUID, provider: str, error: str
+) -> None:
+    async with session.begin():
+        payment = await session.scalar(
+            select(PluginPayment)
+            .where(PluginPayment.order_id == order_id, PluginPayment.provider == provider)
+            .with_for_update()
+        )
+        if payment:
+            payment.status = "creation_unknown"
+            payment.last_error = error[:2000]
+
+
+async def fulfill_plugin_payment(
+    session: AsyncSession,
+    *,
+    provider: str,
+    merchant_order_id: str,
+    transaction_id: str,
+    amount_minor: int,
+    event: dict,
+    provider_data: dict | None = None,
+) -> PluginDelivery:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = (
+            await session.execute(
+                select(PluginPayment, Order, User)
+                .join(Order, Order.id == PluginPayment.order_id)
+                .join(User, User.id == Order.user_id)
+                .where(
+                    PluginPayment.provider == provider,
+                    Order.public_id == merchant_order_id,
+                )
+                .with_for_update(of=(PluginPayment, Order))
+            )
+        ).one_or_none()
+        if row is None:
+            raise PluginPaymentError("未知插件支付订单")
+        payment, order, user = row
+        payment.last_event = event
+        if payment.amount_minor != amount_minor or order.total_amount != amount_minor:
+            payment.status = "conflict"
+            payment.last_error = "callback amount mismatch"
+            order.status = OrderStatus.PAYMENT_EXCEPTION
+            order.payment_exception_reason = f"{provider}_amount_mismatch"
+            return PluginDelivery(
+                user.telegram_user_id,
+                order.public_id,
+                "",
+                "",
+                False,
+                "到账金额校验异常，已转人工处理。",
+            )
+        if payment.status == "paid" and order.status == OrderStatus.FULFILLED:
+            return PluginDelivery(user.telegram_user_id, order.public_id, "", "", False)
+        existing_transaction = await session.scalar(
+            select(PluginPayment.id).where(
+                PluginPayment.transaction_id == transaction_id,
+                PluginPayment.id != payment.id,
+            )
+        )
+        if existing_transaction:
+            raise PluginPaymentError("交易 ID 已被其他订单使用")
+        payment.transaction_id = transaction_id
+        payment.status = "paid"
+        payment.paid_at = payment.paid_at or now
+        if provider_data:
+            payment.provider_data = {**payment.provider_data, **provider_data}
+        order.paid_at = order.paid_at or now
+        item = await session.scalar(select(OrderItem).where(OrderItem.order_id == order.id))
+        card = (
+            await session.scalar(
+                select(Card).where(Card.order_item_id == item.id).with_for_update()
+            )
+            if item
+            else None
+        )
+        if card is None or card.status != CardStatus.RESERVED:
+            order.status = OrderStatus.PAYMENT_EXCEPTION
+            order.payment_exception_reason = f"{provider}_reserved_card_missing_or_invalid"
+            return PluginDelivery(
+                user.telegram_user_id,
+                order.public_id,
+                item.product_name_snapshot if item else "",
+                "",
+                False,
+                "款项已到账，但库存状态异常，已转人工处理。",
+            )
+        secret = card_vault.decrypt(card.secret_ciphertext)
+        card.status = CardStatus.DELIVERED
+        card.delivered_at = now
+        card.reserved_until = None
+        order.status = OrderStatus.FULFILLED
+        order.fulfilled_at = now
+        return PluginDelivery(
+            user.telegram_user_id,
+            order.public_id,
+            item.product_name_snapshot,
+            secret,
+            True,
+        )
+
+
+async def update_plugin_payment_status(
+    session: AsyncSession,
+    *,
+    provider: str,
+    merchant_order_id: str,
+    status: str,
+    event: dict,
+) -> None:
+    async with session.begin():
+        row = (
+            await session.execute(
+                select(PluginPayment, Order)
+                .join(Order, Order.id == PluginPayment.order_id)
+                .where(
+                    PluginPayment.provider == provider,
+                    Order.public_id == merchant_order_id,
+                )
+                .with_for_update(of=(PluginPayment, Order))
+            )
+        ).one_or_none()
+        if row is None:
+            raise PluginPaymentError("未知插件支付订单")
+        payment, _ = row
+        payment.last_event = event
+        if payment.status != "paid":
+            payment.status = status

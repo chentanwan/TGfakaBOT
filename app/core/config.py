@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,15 +16,21 @@ class Settings(BaseSettings):
     card_encryption_key: str
     card_fingerprint_key: str
     order_reservation_minutes: int = 15
+    plugin_modules: tuple[str, ...] = ()
+    plugin_http_host: str = "0.0.0.0"
+    plugin_http_port: int = 8081
     log_level: str = "INFO"
 
-    @field_validator("admin_ids", mode="before")
+    @field_validator("admin_ids", "plugin_modules", mode="before")
     @classmethod
-    def parse_admin_ids(cls, value: object) -> tuple[int, ...]:
+    def parse_csv_tuple(cls, value: object, info: ValidationInfo) -> tuple:
         if value in (None, ""):
             return ()
         if isinstance(value, str):
-            return tuple(int(part.strip()) for part in value.split(",") if part.strip())
+            parts = tuple(part.strip() for part in value.split(",") if part.strip())
+            if info.field_name == "admin_ids":
+                return tuple(int(part) for part in parts)
+            return parts
         return tuple(value)  # type: ignore[arg-type]
 
 

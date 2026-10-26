@@ -167,3 +167,16 @@ Integration tests apply Alembic migrations to the test database before running.
 ## License
 
 MIT
+
+## Plugin architecture
+
+Optional features live outside the core application under `plugins/` and are loaded with `PLUGIN_MODULES`. Core exposes only generic extension points for Telegram routers, catalog/admin buttons, HTTP callback routes, product prices, and idempotent payment fulfillment. New provider-specific code must not be added to `app/services/orders.py` or other provider-neutral core modules.
+
+The first plugin is `plugins.bepusdt`, compatible with the self-hosted [BEpusdt gateway](https://github.com/v03413/BEpusdt):
+
+1. Set `PLUGIN_MODULES=plugins.bepusdt`.
+2. Configure `BEPUSDT_BASE_URL`, `BEPUSDT_API_TOKEN`, and HTTPS `BEPUSDT_PUBLIC_BASE_URL`.
+3. Route `BEPUSDT_PUBLIC_BASE_URL/plugins/bepusdt/notify` to the bot container's plugin HTTP port (default `8081`).
+4. In `/admin` → product list, use **设置 BEpusdt 价格**. A product only displays the USDT option after a fiat price is enabled.
+
+BEpusdt remains a separately deployed gateway. TGfakaBOT does not hold wallet private keys. Callbacks are signature-verified, stored idempotently, and a unique chain transaction ID cannot fulfill more than one order. Gateway timeout/ambiguous creation results are quarantined instead of automatically recreating a payment transaction.

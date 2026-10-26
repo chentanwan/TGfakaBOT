@@ -6,7 +6,7 @@ from aiogram import Bot
 from sqlalchemy import select
 
 from app.db.base import CardStatus, OrderStatus
-from app.db.models import Card, Order, OrderItem, PaymentCharge
+from app.db.models import Card, Order, OrderItem, PaymentCharge, PluginPayment
 from app.db.session import SessionFactory
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,16 @@ async def release_expired_orders_once() -> int:
                 )
             )
             if paid:
+                continue
+            plugin_payment = await session.scalar(
+                select(PluginPayment.id).where(
+                    PluginPayment.order_id == order.id,
+                    PluginPayment.status.in_(
+                        ["creating", "creation_unknown", "waiting", "confirming", "paid"]
+                    ),
+                )
+            )
+            if plugin_payment:
                 continue
             item_id = await session.scalar(
                 select(OrderItem.id).where(OrderItem.order_id == order.id)

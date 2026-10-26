@@ -14,6 +14,7 @@ dependencies = [
   "pydantic-settings==2.11.0",
   "redis==6.4.0",
   "cryptography==46.0.3",
+  "aiohttp==3.13.2",
 ]
 
 [project.optional-dependencies]
@@ -35,5 +36,5 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "plugins*"]
 exclude = ["tests*", "migrations*"]
