@@ -103,7 +103,7 @@ async def send_categories(target: Message) -> None:
         [
             InlineKeyboardButton(
                 text=f"📁 {category.name} ({category.product_count})",
-                callback_data=f"shop:category:{category.id or 'all'}:0",
+                callback_data=f"shop:category:{category.id or 'all'}",
             )
         ]
         for category in categories
@@ -119,9 +119,8 @@ async def send_categories(target: Message) -> None:
 async def callback_category(callback: CallbackQuery) -> None:
     await callback.answer()
     try:
-        _, _, raw_category, raw_page = callback.data.split(":", 3)
+        raw_category = callback.data.rsplit(":", 1)[1]
         category_id = None if raw_category == "all" else uuid.UUID(raw_category)
-        page = max(0, int(raw_page))
     except (ValueError, IndexError):
         await callback.message.answer("Invalid category.")
         return
@@ -131,42 +130,29 @@ async def callback_category(callback: CallbackQuery) -> None:
         product
         for product in products
         if product.category_id == category_id
-        and (product.stock > 0 or product.supplier_stock)
     ]
-    page_size = 6
-    page_items = products[page * page_size : (page + 1) * page_size]
-    if not page_items:
+    if not products:
         await callback.message.answer("No products in this category.")
         return
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{product.name} · {_product_price(product)}",
-                callback_data=f"shop:product:{product.id}",
-            )
-        ]
-        for product in page_items
-    ]
-    nav = []
-    if page > 0:
-        nav.append(
-            InlineKeyboardButton(
-                text="⬅️ Previous",
-                callback_data=f"shop:category:{raw_category}:{page - 1}",
-            )
+    rows = []
+    for product in products:
+        available = product.stock > 0 or product.supplier_stock
+        stock_text = "In stock" if available else "Out of stock"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{product.name} · {_product_price(product)} · {stock_text}"
+                    ),
+                    callback_data=f"shop:product:{product.id}",
+                    style="success" if available else "danger",
+                )
+            ]
         )
-    if (page + 1) * page_size < len(products):
-        nav.append(
-            InlineKeyboardButton(
-                text="Next ➡️", callback_data=f"shop:category:{raw_category}:{page + 1}"
-            )
-        )
-    if nav:
-        rows.append(nav)
     rows.append([InlineKeyboardButton(text="⬅️ Categories", callback_data="shop:categories")])
     await callback.message.answer(
-        f"📦 <b>{html.escape(page_items[0].category_name or 'Products')}</b>\n"
-        f"Page {page + 1} · Select a product:",
+        f"📦 <b>{html.escape(products[0].category_name or 'Products')}</b>\n"
+        f"{len(products)} products · Select a product:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -203,15 +189,17 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
             for provider, (currency, amount) in product.plugin_prices.items()
         },
     )
-    for plugin in get_plugin_registry().plugins:
-        button = plugin.catalog_button(plugin_product)
-        if button is not None:
-            rows.append([button])
+    available = product.stock > 0 or product.supplier_stock
+    if available:
+        for plugin in get_plugin_registry().plugins:
+            button = plugin.catalog_button(plugin_product)
+            if button is not None:
+                rows.append([button])
     raw_category = str(product.category_id) if product.category_id else "all"
     rows.append(
-        [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:category:{raw_category}:0")]
+        [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:category:{raw_category}")]
     )
-    delivery = "Instant delivery" if product.supplier_stock or product.stock else "Out of stock"
+    delivery = "Instant delivery" if available else "Out of stock"
     await callback.message.answer(
         f"<b>{html.escape(product.name)}</b>\n\n"
         f"{html.escape(product.description or 'No description available.')}\n\n"

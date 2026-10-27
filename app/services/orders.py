@@ -132,12 +132,12 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
     ).scalars().all() if sku_ids else []
     supplier_rows = (
         await session.execute(
-            select(SupplierProduct).where(
-                SupplierProduct.sku_id.in_(sku_ids), SupplierProduct.in_stock.is_(True)
-            )
+            select(SupplierProduct).where(SupplierProduct.sku_id.in_(sku_ids))
         )
     ).scalars().all() if sku_ids else []
-    supplier_skus = {supplier.sku_id for supplier in supplier_rows}
+    supplier_skus = {
+        supplier.sku_id for supplier in supplier_rows if supplier.in_stock
+    }
     prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
     for price in price_rows:
         prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
@@ -164,8 +164,6 @@ async def list_catalog_categories(session: AsyncSession) -> list[CatalogCategory
     products = await list_products(session)
     counts: dict[tuple[uuid.UUID | None, str], int] = {}
     for product in products:
-        if product.stock < 1 and not product.supplier_stock:
-            continue
         key = (product.category_id, product.category_name or "全部商品")
         counts[key] = counts.get(key, 0) + 1
     return [
