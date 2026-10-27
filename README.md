@@ -203,3 +203,8 @@ Each supplier plugin owns independent pricing and synchronization variables. Pro
 The ProdSeller admin menu now includes a paginated upstream catalog with cost, suggested USD sale price, stock, and one-click draft import. The supplier exception queue lists pending, paid, failed, and unknown purchases. A recovery action requires an administrator evidence note, queries the authoritative upstream order, records the administrator/time/note audit, and only delivers a key when the upstream status is `delivered`.
 
 Automatic product synchronization enforces the configured profit floor. If an active BEpusdt sale price falls below `upstream cost + percentage profit + fixed profit`, the payment price is disabled and the supplier mapping is marked as profit-suspended; it is never silently increased. An administrator must review and re-enable a safe price.
+
+
+### Supplier operations controls
+
+The ProdSeller exception queue supports `all`, `failed`, `unknown`, `pending`, and `paid` filters with pagination. Each record has a redacted audit view and an authoritative recovery query. When profit protection disables a price, every configured administrator receives a Telegram alert with **use suggested price** and **custom price** actions. Custom prices below the current configured profit floor are rejected.

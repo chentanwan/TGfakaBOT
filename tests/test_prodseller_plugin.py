@@ -80,3 +80,21 @@ def test_sync_suspends_price_when_profit_floor_is_broken() -> None:
     assert "price.amount_minor < required_sale" in source
     assert "mapping.suspended_for_profit = True" in source
     assert "price.is_active = False" in source
+
+
+def test_exception_queue_supports_filters_pagination_and_audit() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "plugin:prodseller:exceptions:failed:0" in source
+    assert "plugin:prodseller:exceptions:unknown:0" in source
+    assert "plugin:prodseller:audit:" in source
+    service = Path("app/services/supplier_orders.py").read_text()
+    assert "offset: int = 0" in service
+    assert "get_supplier_order_summary" in service
+
+
+def test_profit_suspension_notifies_and_offers_safe_repricing() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "_notify_profit_suspensions" in source
+    assert "plugin:prodseller:suggest:" in source
+    assert "plugin:prodseller:custom:" in source
+    assert "售价低于当前最低安全售价" in source

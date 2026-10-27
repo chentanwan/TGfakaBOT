@@ -13,7 +13,7 @@ from aiohttp import web
 from sqlalchemy import select
 
 from app.db.base import ProductStatus
-from app.db.models import SKU, Product, ProductPrice, SupplierProduct
+from app.db.models import SKU, Product, ProductPrice, SupplierOrder, SupplierProduct
 from app.db.session import SessionFactory
 from app.plugins.base import PluginProduct
 from app.services.supplier_fulfillment import (
@@ -23,6 +23,7 @@ from app.services.supplier_fulfillment import (
 )
 from app.services.supplier_orders import (
     get_or_create_supplier_order,
+    get_supplier_order_summary,
     list_supplier_exceptions,
     record_supplier_recovery,
     save_supplier_order_result,
@@ -42,6 +43,10 @@ class SupplierRecovery(StatesGroup):
     note = State()
 
 
+class CustomPrice(StatesGroup):
+    amount = State()
+
+
 class ProdsellerPlugin:
     name = PROVIDER
 
@@ -58,12 +63,22 @@ class ProdsellerPlugin:
             self._import_from_browser, F.data.startswith("plugin:prodseller:add:")
         )
         self.router.callback_query.register(
-            self._exceptions, F.data == "plugin:prodseller:exceptions"
+            self._exceptions, F.data.startswith("plugin:prodseller:exceptions:")
+        )
+        self.router.callback_query.register(
+            self._audit_detail, F.data.startswith("plugin:prodseller:audit:")
+        )
+        self.router.callback_query.register(
+            self._apply_suggested_price, F.data.startswith("plugin:prodseller:suggest:")
+        )
+        self.router.callback_query.register(
+            self._start_custom_price, F.data.startswith("plugin:prodseller:custom:")
         )
         self.router.callback_query.register(
             self._recover_query, F.data.startswith("plugin:prodseller:recover:")
         )
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
+        self.router.message.register(self._save_custom_price, CustomPrice.amount)
         self._bot: Bot | None = None
         self._poll_task: asyncio.Task | None = None
         self._sync_task: asyncio.Task | None = None
@@ -86,7 +101,7 @@ class ProdsellerPlugin:
             ],
             [
                 InlineKeyboardButton(
-                    text="⚠️ 供货异常", callback_data="plugin:prodseller:exceptions"
+                    text="⚠️ 供货异常", callback_data="plugin:prodseller:exceptions:all:0"
                 ),
                 InlineKeyboardButton(
                     text="💰 ProdSeller 余额", callback_data="plugin:prodseller:balance"
@@ -186,8 +201,9 @@ class ProdsellerPlugin:
         while True:
             try:
                 products = await self.client.list_products()
-                updated = await self._sync_existing(products)
+                updated, suspended = await self._sync_existing(products)
                 logger.info("ProdSeller automatic product sync updated %s mappings", updated)
+                await self._notify_profit_suspensions(suspended)
             except Exception:
                 logger.exception("ProdSeller automatic product sync failed")
             await asyncio.sleep(
@@ -346,34 +362,128 @@ class ProdsellerPlugin:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
             return
+        try:
+            _, _, _, raw_status, raw_page = callback.data.split(":", 4)
+            status = None if raw_status == "all" else raw_status
+            page = max(0, int(raw_page))
+        except (ValueError, IndexError):
+            status, page = None, 0
         await callback.answer()
+        page_size = 5
         async with SessionFactory() as session:
-            exceptions = await list_supplier_exceptions(session, provider=PROVIDER)
+            exceptions = await list_supplier_exceptions(
+                session,
+                provider=PROVIDER,
+                status=status,
+                offset=page * page_size,
+                limit=page_size + 1,
+            )
+        has_next = len(exceptions) > page_size
+        exceptions = exceptions[:page_size]
         if not exceptions:
-            await callback.message.answer("✅ 当前没有待处理的 ProdSeller 供货订单。")
+            await callback.message.answer("✅ 当前筛选条件下没有待处理供货订单。")
             return
-        lines = ["⚠️ <b>ProdSeller 供货异常与待交付</b>"]
-        rows = []
+        label = status or "全部"
+        lines = [f"⚠️ <b>ProdSeller 供货异常 · {label} · 第 {page + 1} 页</b>"]
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text="全部", callback_data="plugin:prodseller:exceptions:all:0"
+                ),
+                InlineKeyboardButton(
+                    text="失败", callback_data="plugin:prodseller:exceptions:failed:0"
+                ),
+                InlineKeyboardButton(
+                    text="未知", callback_data="plugin:prodseller:exceptions:unknown:0"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="待处理", callback_data="plugin:prodseller:exceptions:pending:0"
+                ),
+                InlineKeyboardButton(
+                    text="已付款", callback_data="plugin:prodseller:exceptions:paid:0"
+                ),
+            ],
+        ]
         for item in exceptions:
             error = html.escape(item.last_error or "暂无错误")
-            external = html.escape(item.external_order_id or "尚无上游订单号")
             lines.append(
                 f"\n<b>{html.escape(item.product_name)}</b>\n"
-                f"本地：<code>{item.public_id}</code> · 状态 {item.status}\n"
-                f"上游：<code>{external}</code>\n{error}"
+                f"<code>{item.public_id}</code> · {item.status}\n{error}"
             )
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=f"🔎 查询/恢复 {item.public_id}",
+                        text=f"📋 详情 {item.public_id}",
+                        callback_data=f"plugin:prodseller:audit:{item.id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="🔎 查询恢复",
                         callback_data=f"plugin:prodseller:recover:{item.id}",
-                    )
+                    ),
                 ]
             )
+        navigation = []
+        filter_value = status or "all"
+        if page > 0:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ 上一页",
+                    callback_data=f"plugin:prodseller:exceptions:{filter_value}:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="下一页 ➡️",
+                    callback_data=f"plugin:prodseller:exceptions:{filter_value}:{page + 1}",
+                )
+            )
+        if navigation:
+            rows.append(navigation)
         from aiogram.types import InlineKeyboardMarkup
 
         await callback.message.answer(
             "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        )
+
+    async def _audit_detail(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            supplier_order_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        await callback.answer()
+        async with SessionFactory() as session:
+            summary = await get_supplier_order_summary(
+                session, supplier_order_id=supplier_order_id
+            )
+            supplier_order = await session.get(SupplierOrder, supplier_order_id)
+        if summary is None or supplier_order is None:
+            await callback.message.answer("订单不存在。")
+            return
+        response_keys = ", ".join(sorted(supplier_order.response_data.keys())) or "无"
+        cost = (
+            f"{summary.cost_amount_minor / 100:.2f} {summary.cost_currency}"
+            if summary.cost_amount_minor is not None
+            else "未知"
+        )
+        await callback.message.answer(
+            "📋 <b>供货订单审计</b>\n\n"
+            f"商品：{html.escape(summary.product_name)}\n"
+            f"本地订单：<code>{summary.public_id}</code>\n"
+            f"上游订单：<code>{html.escape(summary.external_order_id or '无')}</code>\n"
+            f"状态：{html.escape(summary.status)}\n"
+            f"成本：{cost}\n"
+            f"错误：{html.escape(summary.last_error or '无')}\n"
+            f"恢复人：<code>{supplier_order.recovered_by_telegram_id or '无'}</code>\n"
+            f"恢复时间：{supplier_order.recovered_at or '无'}\n"
+            f"恢复说明：{html.escape(supplier_order.recovery_note or '无')}\n"
+            f"响应字段：{html.escape(response_keys)}"
         )
 
     async def _recover_query(self, callback: CallbackQuery, state: FSMContext) -> None:
@@ -452,6 +562,99 @@ class ProdsellerPlugin:
                 f"卡密：<code>{html.escape(delivery.secret)}</code>",
             )
 
+    async def _apply_suggested_price(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            supplier_product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        async with SessionFactory() as session, session.begin():
+            mapping = await session.scalar(
+                select(SupplierProduct)
+                .where(SupplierProduct.id == supplier_product_id)
+                .with_for_update()
+            )
+            if mapping is None:
+                await callback.answer("上游商品不存在", show_alert=True)
+                return
+            price = await session.scalar(
+                select(ProductPrice)
+                .where(
+                    ProductPrice.sku_id == mapping.sku_id,
+                    ProductPrice.provider == "bepusdt",
+                )
+                .with_for_update()
+            )
+            if price is None:
+                await callback.answer("销售价格不存在", show_alert=True)
+                return
+            price.amount_minor = self._sale_price(mapping.cost_amount_minor)
+            price.is_active = True
+            mapping.suspended_for_profit = False
+            mapping.suspension_reason = None
+        await callback.answer("已应用建议售价")
+        await callback.message.answer("✅ 已更新并启用 BEpusdt 建议售价。")
+
+    async def _start_custom_price(
+        self, callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            supplier_product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        await state.set_state(CustomPrice.amount)
+        await state.update_data(supplier_product_id=str(supplier_product_id))
+        await callback.answer()
+        await callback.message.answer("请输入新的 USD 售价，例如 9.99。")
+
+    async def _save_custom_price(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.from_user.id):
+            return
+        try:
+            amount = Decimal((message.text or "").strip())
+            if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
+                raise ValueError
+            amount_minor = int(amount * 100)
+            data = await state.get_data()
+            supplier_product_id = uuid.UUID(data["supplier_product_id"])
+            async with SessionFactory() as session, session.begin():
+                mapping = await session.scalar(
+                    select(SupplierProduct)
+                    .where(SupplierProduct.id == supplier_product_id)
+                    .with_for_update()
+                )
+                if mapping is None:
+                    raise ValueError("上游商品不存在")
+                required = self._sale_price(mapping.cost_amount_minor)
+                if amount_minor < required:
+                    raise ValueError(f"售价低于当前最低安全售价 ${required / 100:.2f}")
+                price = await session.scalar(
+                    select(ProductPrice)
+                    .where(
+                        ProductPrice.sku_id == mapping.sku_id,
+                        ProductPrice.provider == "bepusdt",
+                    )
+                    .with_for_update()
+                )
+                if price is None:
+                    raise ValueError("销售价格不存在")
+                price.amount_minor = amount_minor
+                price.is_active = True
+                mapping.suspended_for_profit = False
+                mapping.suspension_reason = None
+        except (ValueError, KeyError) as exc:
+            await message.answer(f"❌ {html.escape(str(exc) or '价格无效')}")
+            return
+        await state.clear()
+        await message.answer(f"✅ 已更新并启用售价：${amount_minor / 100:.2f}")
+
     async def _balance(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
@@ -471,11 +674,14 @@ class ProdsellerPlugin:
         await callback.answer("同步中…")
         try:
             products = await self.client.list_products()
-            updated = await self._sync_existing(products)
+            updated, suspended = await self._sync_existing(products)
+            await self._notify_profit_suspensions(suspended)
         except ProdsellerError as exc:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return
-        await callback.message.answer(f"✅ 已同步 {updated} 个已接入的上游商品。")
+        await callback.message.answer(
+            f"✅ 已同步 {updated} 个已接入商品；利润保护停用 {len(suspended)} 个。"
+        )
 
     async def _start_import(self, callback: CallbackQuery, state: FSMContext) -> None:
         if not self._is_admin(callback.from_user.id):
@@ -564,9 +770,12 @@ class ProdsellerPlugin:
             )
             return product.id
 
-    async def _sync_existing(self, products: list[dict]) -> int:
+    async def _sync_existing(
+        self, products: list[dict]
+    ) -> tuple[int, list[tuple[uuid.UUID, str, int, int]]]:
         by_id = {product["id"]: product for product in products}
         updated = 0
+        suspended: list[tuple[uuid.UUID, str, int, int]] = []
         async with SessionFactory() as session, session.begin():
             mappings = (
                 await session.scalars(
@@ -597,11 +806,51 @@ class ProdsellerPlugin:
                     mapping.suspension_reason = (
                         f"sale {price.amount_minor} below required {required_sale}"
                     )
+                    name = str(remote.get("name") or mapping.external_product_id)
+                    suspended.append(
+                        (mapping.id, name, price.amount_minor, required_sale)
+                    )
                 elif price and price.amount_minor >= required_sale:
                     mapping.suspended_for_profit = False
                     mapping.suspension_reason = None
                 updated += 1
-        return updated
+        return updated, suspended
+
+    async def _notify_profit_suspensions(
+        self, suspended: list[tuple[uuid.UUID, str, int, int]]
+    ) -> None:
+        if not suspended or self._bot is None:
+            return
+        from aiogram.types import InlineKeyboardMarkup
+
+        from app.core.config import get_settings
+
+        for mapping_id, name, old_price, suggested in suspended:
+            text = (
+                "⚠️ <b>商品因利润不足已停用</b>\n\n"
+                f"商品：{html.escape(name)}\n"
+                f"原售价：${old_price / 100:.2f}\n"
+                f"最低建议售价：${suggested / 100:.2f}"
+            )
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"✅ 使用 ${suggested / 100:.2f}",
+                            callback_data=f"plugin:prodseller:suggest:{mapping_id}",
+                        ),
+                        InlineKeyboardButton(
+                            text="✏️ 自定义售价",
+                            callback_data=f"plugin:prodseller:custom:{mapping_id}",
+                        ),
+                    ]
+                ]
+            )
+            for admin_id in get_settings().admin_ids:
+                try:
+                    await self._bot.send_message(admin_id, text, reply_markup=keyboard)
+                except Exception:
+                    logger.exception("failed to notify admin %s about profit suspension", admin_id)
 
     async def _save_result(
         self,

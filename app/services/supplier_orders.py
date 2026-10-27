@@ -76,21 +76,31 @@ class SupplierOrderSummary:
 
 
 async def list_supplier_exceptions(
-    session: AsyncSession, *, provider: str, limit: int = 20
+    session: AsyncSession,
+    *,
+    provider: str,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 6,
 ) -> list[SupplierOrderSummary]:
-    rows = (
-        await session.execute(
-            select(SupplierOrder, Order, OrderItem)
-            .join(Order, Order.id == SupplierOrder.order_id)
-            .join(OrderItem, OrderItem.order_id == Order.id)
-            .where(
-                SupplierOrder.provider == provider,
-                SupplierOrder.status.in_(["unknown", "failed", "pending", "paid"]),
-            )
-            .order_by(SupplierOrder.updated_at.asc())
-            .limit(limit)
+    statuses = ["unknown", "failed", "pending", "paid"]
+    if status is not None and status not in statuses:
+        raise ValueError("不支持的供货订单状态筛选")
+    statement = (
+        select(SupplierOrder, Order, OrderItem)
+        .join(Order, Order.id == SupplierOrder.order_id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .where(
+            SupplierOrder.provider == provider,
+            SupplierOrder.status == status
+            if status is not None
+            else SupplierOrder.status.in_(statuses),
         )
-    ).all()
+        .order_by(SupplierOrder.updated_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = (await session.execute(statement)).all()
     return [
         SupplierOrderSummary(
             id=supplier_order.id,
@@ -132,3 +142,30 @@ async def record_supplier_recovery(
         supplier_order.recovered_at = datetime.now(UTC)
         supplier_order.recovered_by_telegram_id = admin_telegram_id
         return supplier_order
+
+async def get_supplier_order_summary(
+    session: AsyncSession, *, supplier_order_id: uuid.UUID
+) -> SupplierOrderSummary | None:
+    row = (
+        await session.execute(
+            select(SupplierOrder, Order, OrderItem)
+            .join(Order, Order.id == SupplierOrder.order_id)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .where(SupplierOrder.id == supplier_order_id)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    supplier_order, order, item = row
+    return SupplierOrderSummary(
+        id=supplier_order.id,
+        order_id=order.id,
+        public_id=order.public_id,
+        product_name=item.product_name_snapshot,
+        provider=supplier_order.provider,
+        external_order_id=supplier_order.external_order_id,
+        status=supplier_order.status,
+        cost_currency=supplier_order.cost_currency,
+        cost_amount_minor=supplier_order.cost_amount_minor,
+        last_error=supplier_order.last_error or "",
+    )
