@@ -65,3 +65,18 @@ def test_every_example_environment_variable_has_comment() -> None:
         if not line or line.startswith("#"):
             continue
         assert index > 0 and lines[index - 1].startswith("#"), line
+
+
+def test_admin_has_product_browser_and_exception_recovery() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "plugin:prodseller:browse:" in source
+    assert "plugin:prodseller:add:" in source
+    assert "plugin:prodseller:exceptions" in source
+    assert "record_supplier_recovery" in source
+
+
+def test_sync_suspends_price_when_profit_floor_is_broken() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "price.amount_minor < required_sale" in source
+    assert "mapping.suspended_for_profit = True" in source
+    assert "price.is_active = False" in source

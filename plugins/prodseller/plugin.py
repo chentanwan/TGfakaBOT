@@ -2,6 +2,7 @@ import asyncio
 import html
 import logging
 import uuid
+from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal
 
 from aiogram import Bot, F, Router
@@ -22,6 +23,8 @@ from app.services.supplier_fulfillment import (
 )
 from app.services.supplier_orders import (
     get_or_create_supplier_order,
+    list_supplier_exceptions,
+    record_supplier_recovery,
     save_supplier_order_result,
 )
 from plugins.prodseller.client import ProdsellerClient, ProdsellerError
@@ -35,6 +38,10 @@ class ImportProduct(StatesGroup):
     external_id = State()
 
 
+class SupplierRecovery(StatesGroup):
+    note = State()
+
+
 class ProdsellerPlugin:
     name = PROVIDER
 
@@ -45,9 +52,18 @@ class ProdsellerPlugin:
         self.router.callback_query.register(self._balance, F.data == "plugin:prodseller:balance")
         self.router.callback_query.register(self._sync, F.data == "plugin:prodseller:sync")
         self.router.callback_query.register(
-            self._start_import, F.data == "plugin:prodseller:import"
+            self._browse, F.data.startswith("plugin:prodseller:browse:")
         )
-        self.router.message.register(self._finish_import, ImportProduct.external_id)
+        self.router.callback_query.register(
+            self._import_from_browser, F.data.startswith("plugin:prodseller:add:")
+        )
+        self.router.callback_query.register(
+            self._exceptions, F.data == "plugin:prodseller:exceptions"
+        )
+        self.router.callback_query.register(
+            self._recover_query, F.data.startswith("plugin:prodseller:recover:")
+        )
+        self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
         self._bot: Bot | None = None
         self._poll_task: asyncio.Task | None = None
         self._sync_task: asyncio.Task | None = None
@@ -62,7 +78,7 @@ class ProdsellerPlugin:
         return [
             [
                 InlineKeyboardButton(
-                    text="🚚 导入 ProdSeller 商品", callback_data="plugin:prodseller:import"
+                    text="🛍 ProdSeller 商品", callback_data="plugin:prodseller:browse:0"
                 ),
                 InlineKeyboardButton(
                     text="🔄 同步上游", callback_data="plugin:prodseller:sync"
@@ -70,8 +86,11 @@ class ProdsellerPlugin:
             ],
             [
                 InlineKeyboardButton(
+                    text="⚠️ 供货异常", callback_data="plugin:prodseller:exceptions"
+                ),
+                InlineKeyboardButton(
                     text="💰 ProdSeller 余额", callback_data="plugin:prodseller:balance"
-                )
+                ),
             ],
         ]
 
@@ -241,6 +260,198 @@ class ProdsellerPlugin:
                     "ProdSeller poll failed for supplier order %s", supplier_order.id
                 )
 
+    async def _browse(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            page = max(0, int(callback.data.rsplit(":", 1)[1]))
+        except (ValueError, IndexError):
+            page = 0
+        await callback.answer("加载中…")
+        try:
+            products = await self.client.list_products()
+        except ProdsellerError as exc:
+            await callback.message.answer(f"❌ {html.escape(str(exc))}")
+            return
+        products = [item for item in products if not item["requiresEmailActivation"]]
+        page_size = 5
+        page_items = products[page * page_size : (page + 1) * page_size]
+        if not page_items:
+            await callback.message.answer("暂无更多可导入的即时交付商品。")
+            return
+        lines = [f"🛍 <b>ProdSeller 商品 · 第 {page + 1} 页</b>"]
+        rows = []
+        for item in page_items:
+            cost_minor = self._minor(item["price"])
+            sale_minor = self._sale_price(cost_minor)
+            stock = "有货" if item["inStock"] else "缺货"
+            lines.append(
+                f"\n<b>{html.escape(item['name'])}</b>\n"
+                f"成本 ${cost_minor / 100:.2f} · 建议售价 ${sale_minor / 100:.2f} · {stock}"
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"导入 {item['name'][:20]}",
+                        callback_data=f"plugin:prodseller:add:{item['id']}",
+                    )
+                ]
+            )
+        navigation = []
+        if page > 0:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ 上一页", callback_data=f"plugin:prodseller:browse:{page - 1}"
+                )
+            )
+        if (page + 1) * page_size < len(products):
+            navigation.append(
+                InlineKeyboardButton(
+                    text="下一页 ➡️", callback_data=f"plugin:prodseller:browse:{page + 1}"
+                )
+            )
+        if navigation:
+            rows.append(navigation)
+        from aiogram.types import InlineKeyboardMarkup
+
+        await callback.message.answer(
+            "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        )
+
+    async def _import_from_browser(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        external_id = callback.data.rsplit(":", 1)[1]
+        await callback.answer("导入中…")
+        try:
+            products = await self.client.list_products()
+            product = next(item for item in products if item["id"] == external_id)
+            if product["requiresEmailActivation"]:
+                raise ProdsellerError("该商品需要买家邮箱，当前版本暂不支持")
+            local_id = await self._import_product(product)
+        except StopIteration:
+            await callback.message.answer("❌ 上游商品不存在。")
+            return
+        except ProdsellerError as exc:
+            await callback.message.answer(f"❌ {html.escape(str(exc))}")
+            return
+        await callback.message.answer(
+            "✅ 商品已导入为草稿；建议售价默认关闭。\n"
+            f"本地商品 ID：<code>{local_id}</code>"
+        )
+
+    async def _exceptions(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        await callback.answer()
+        async with SessionFactory() as session:
+            exceptions = await list_supplier_exceptions(session, provider=PROVIDER)
+        if not exceptions:
+            await callback.message.answer("✅ 当前没有待处理的 ProdSeller 供货订单。")
+            return
+        lines = ["⚠️ <b>ProdSeller 供货异常与待交付</b>"]
+        rows = []
+        for item in exceptions:
+            error = html.escape(item.last_error or "暂无错误")
+            external = html.escape(item.external_order_id or "尚无上游订单号")
+            lines.append(
+                f"\n<b>{html.escape(item.product_name)}</b>\n"
+                f"本地：<code>{item.public_id}</code> · 状态 {item.status}\n"
+                f"上游：<code>{external}</code>\n{error}"
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"🔎 查询/恢复 {item.public_id}",
+                        callback_data=f"plugin:prodseller:recover:{item.id}",
+                    )
+                ]
+            )
+        from aiogram.types import InlineKeyboardMarkup
+
+        await callback.message.answer(
+            "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        )
+
+    async def _recover_query(self, callback: CallbackQuery, state: FSMContext) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            supplier_order_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        await state.set_state(SupplierRecovery.note)
+        await state.update_data(supplier_order_id=str(supplier_order_id))
+        await callback.answer()
+        await callback.message.answer(
+            "请输入本次上游核验说明（至少 6 字符）。提交后会查询上游并尝试安全恢复交付。"
+        )
+
+    async def _save_recovery_note(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.from_user.id):
+            return
+        note = (message.text or "").strip()
+        data = await state.get_data()
+        try:
+            supplier_order_id = uuid.UUID(data["supplier_order_id"])
+            async with SessionFactory() as session:
+                supplier_order = await record_supplier_recovery(
+                    session,
+                    supplier_order_id=supplier_order_id,
+                    admin_telegram_id=message.from_user.id,
+                    note=note,
+                )
+            if not supplier_order.external_order_id:
+                raise ValueError("该记录尚无上游订单号，不能直接查询；请联系客服核验采购结果")
+            response = await self.client.get_order(supplier_order.external_order_id)
+            amount_minor = self._minor(response["amount"])
+            await self._save_result(
+                supplier_order.order_id,
+                response["orderId"],
+                response["status"],
+                amount_minor,
+                response,
+            )
+            if response["status"] == "delivered":
+                await self._deliver_recovered_order(supplier_order.order_id, response)
+        except (KeyError, ValueError, ProdsellerError, SupplierFulfillmentError) as exc:
+            await message.answer(f"❌ {html.escape(str(exc))}")
+            return
+        await state.clear()
+        await message.answer(f"✅ 上游状态已刷新：{html.escape(response['status'])}")
+
+    async def _deliver_recovered_order(self, order_id: uuid.UUID, response: dict) -> None:
+        async with SessionFactory() as session:
+            context = await get_supplier_purchase_context(
+                session, order_id=order_id, provider=PROVIDER
+            )
+        if context is None:
+            raise SupplierFulfillmentError("找不到订单的上游商品映射")
+        async with SessionFactory() as session:
+            delivery = await fulfill_supplier_order(
+                session,
+                order_id=context.order_id,
+                provider=PROVIDER,
+                external_order_id=response["orderId"],
+                delivered_secret=self._delivered_secret(response),
+                supplier_amount_minor=self._minor(response["amount"]),
+                supplier_response=response,
+                sale_currency=context.sale_currency,
+                sale_amount_minor=context.sale_amount_minor,
+            )
+        if delivery.should_deliver and self._bot is not None:
+            await self._bot.send_message(
+                delivery.telegram_user_id,
+                "✅ <b>上游订单已恢复并完成交付</b>\n\n"
+                f"订单：<code>{delivery.public_id}</code>\n"
+                f"卡密：<code>{html.escape(delivery.secret)}</code>",
+            )
+
     async def _balance(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
@@ -367,10 +578,28 @@ class ProdsellerPlugin:
                 if remote is None:
                     mapping.in_stock = False
                     continue
-                mapping.cost_amount_minor = self._minor(remote["price"])
+                new_cost = self._minor(remote["price"])
+                mapping.cost_amount_minor = new_cost
                 mapping.in_stock = remote["inStock"]
                 mapping.requires_customer_email = remote["requiresEmailActivation"]
                 mapping.metadata_json = remote
+                mapping.last_synced_at = datetime.now(UTC)
+                price = await session.scalar(
+                    select(ProductPrice).where(
+                        ProductPrice.sku_id == mapping.sku_id,
+                        ProductPrice.provider == "bepusdt",
+                    )
+                )
+                required_sale = self._sale_price(new_cost)
+                if price and price.is_active and price.amount_minor < required_sale:
+                    price.is_active = False
+                    mapping.suspended_for_profit = True
+                    mapping.suspension_reason = (
+                        f"sale {price.amount_minor} below required {required_sale}"
+                    )
+                elif price and price.amount_minor >= required_sale:
+                    mapping.suspended_for_profit = False
+                    mapping.suspension_reason = None
                 updated += 1
         return updated
 

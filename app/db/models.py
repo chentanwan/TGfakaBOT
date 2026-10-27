@@ -111,6 +111,9 @@ class SupplierProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     in_stock: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     requires_customer_email: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspended_for_profit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    suspension_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class ProductPrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -225,6 +228,9 @@ class SupplierOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     cost_amount_minor: Mapped[int | None] = mapped_column(BigInteger)
     response_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text)
+    recovery_note: Mapped[str | None] = mapped_column(Text)
+    recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recovered_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class PluginPayment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
