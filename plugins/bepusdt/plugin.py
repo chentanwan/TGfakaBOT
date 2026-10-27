@@ -40,6 +40,9 @@ class BepusdtPlugin:
         self.settings = get_bepusdt_settings()
         self.router = Router(name="plugin_bepusdt")
         self.router.callback_query.register(
+            self._confirm_checkout, F.data.startswith("plugin:bepusdt:confirm:")
+        )
+        self.router.callback_query.register(
             self._checkout, F.data.startswith("plugin:bepusdt:buy:")
         )
         self.router.callback_query.register(
@@ -53,7 +56,7 @@ class BepusdtPlugin:
             return None
         return InlineKeyboardButton(
             text=f"₮ USDT / {Decimal(price.amount_minor) / Decimal(100):.2f} {price.currency}",
-            callback_data=f"plugin:bepusdt:buy:{product.id}",
+            callback_data=f"plugin:bepusdt:confirm:{product.id}",
         )
 
     def admin_product_button(self, product_id: uuid.UUID) -> InlineKeyboardButton | None:
@@ -125,6 +128,44 @@ class BepusdtPlugin:
             return
         await state.clear()
         await message.answer("✅ BEpusdt 商品价格已更新。")
+
+    async def _confirm_checkout(self, callback: CallbackQuery) -> None:
+        await callback.answer()
+        try:
+            product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.message.answer("Invalid product.")
+            return
+        from app.services.orders import get_product
+
+        async with SessionFactory() as session:
+            product = await get_product(session, product_id)
+        if product is None or "bepusdt" not in product.plugin_prices:
+            await callback.message.answer("This payment option is unavailable.")
+            return
+        currency, amount_minor = product.plugin_prices["bepusdt"]
+        await callback.message.answer(
+            "🧾 <b>Confirm purchase</b>\n\n"
+            f"Product: {html.escape(product.name)}\n"
+            f"Price: {Decimal(amount_minor) / Decimal(100):.2f} {currency}\n"
+            "Payment: USDT-TRC20\n"
+            "Delivery: Instant after payment confirmation",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ Continue to payment",
+                            callback_data=f"plugin:bepusdt:buy:{product.id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ Back", callback_data=f"shop:product:{product.id}"
+                        )
+                    ],
+                ]
+            ),
+        )
 
     async def _checkout(self, callback: CallbackQuery) -> None:
         await callback.answer()

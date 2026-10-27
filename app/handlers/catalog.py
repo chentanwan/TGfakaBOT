@@ -21,6 +21,7 @@ from app.services.orders import (
     cancel_unpaid_order,
     create_order,
     get_user_order,
+    list_catalog_categories,
     list_products,
     list_user_orders,
     match_and_fulfill_payment,
@@ -33,50 +34,221 @@ settings = get_settings()
 ORDERS_PAGE_SIZE = 5
 
 
-def _shop_keyboard(products: list) -> InlineKeyboardMarkup:
+def _home_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🛍 Products", callback_data="shop:categories")],
+            [
+                InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
+                InlineKeyboardButton(text="👤 My account", callback_data="shop:account"),
+            ],
+            [
+                InlineKeyboardButton(text="ℹ️ Help", callback_data="shop:help"),
+                InlineKeyboardButton(text="💬 Support", url=settings.support_url),
+            ],
+        ]
+    )
+
+
+def _product_price(product) -> str:
+    if "bepusdt" in product.plugin_prices:
+        currency, amount = product.plugin_prices["bepusdt"]
+        return f"{amount / 100:.2f} {currency}"
+    return f"⭐ {product.price_xtr}"
+
+
+async def send_home(target: Message, display_name: str) -> None:
+    await target.answer(
+        "👋 <b>Welcome to TGfakaBOT</b>\n\n"
+        f"Hello, {html.escape(display_name)}!\n"
+        "Browse digital products, receive instant delivery and manage your orders here.",
+        reply_markup=_home_keyboard(),
+    )
+
+
+@router.message(CommandStart())
+async def show_home(message: Message) -> None:
+    await send_home(message, message.from_user.full_name)
+
+
+@router.message(Command("shop"))
+async def show_shop_command(message: Message) -> None:
+    await send_categories(message)
+
+
+@router.callback_query(F.data == "shop:home")
+async def callback_home(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await send_home(callback.message, callback.from_user.full_name)
+
+
+@router.callback_query(F.data == "shop:categories")
+async def callback_categories(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await send_categories(callback.message)
+
+
+async def send_categories(target: Message) -> None:
+    async with SessionFactory() as session:
+        categories = await list_catalog_categories(session)
+    if not categories:
+        await target.answer(
+            "🛍 No products are available right now.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+            ),
+        )
+        return
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"📁 {category.name} ({category.product_count})",
+                callback_data=f"shop:category:{category.id or 'all'}:0",
+            )
+        ]
+        for category in categories
+    ]
+    rows.append([InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")])
+    await target.answer(
+        "🛍 <b>Products</b>\n\nChoose a category:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("shop:category:"))
+async def callback_category(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        _, _, raw_category, raw_page = callback.data.split(":", 3)
+        category_id = None if raw_category == "all" else uuid.UUID(raw_category)
+        page = max(0, int(raw_page))
+    except (ValueError, IndexError):
+        await callback.message.answer("Invalid category.")
+        return
+    async with SessionFactory() as session:
+        products = await list_products(session)
+    products = [
+        product
+        for product in products
+        if product.category_id == category_id
+        and (product.stock > 0 or product.supplier_stock)
+    ]
+    page_size = 6
+    page_items = products[page * page_size : (page + 1) * page_size]
+    if not page_items:
+        await callback.message.answer("No products in this category.")
+        return
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{product.name} · {_product_price(product)}",
+                callback_data=f"shop:product:{product.id}",
+            )
+        ]
+        for product in page_items
+    ]
+    nav = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️ Previous",
+                callback_data=f"shop:category:{raw_category}:{page - 1}",
+            )
+        )
+    if (page + 1) * page_size < len(products):
+        nav.append(
+            InlineKeyboardButton(
+                text="Next ➡️", callback_data=f"shop:category:{raw_category}:{page + 1}"
+            )
+        )
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ Categories", callback_data="shop:categories")])
+    await callback.message.answer(
+        f"📦 <b>{html.escape(page_items[0].category_name or 'Products')}</b>\n"
+        f"Page {page + 1} · Select a product:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("shop:product:"))
+async def callback_product_detail(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.message.answer("Invalid product.")
+        return
+    async with SessionFactory() as session:
+        products = await list_products(session)
+    product = next((item for item in products if item.id == product_id), None)
+    if product is None:
+        await callback.message.answer("Product is unavailable.")
+        return
     rows = []
-    registry = get_plugin_registry()
-    for product in products:
-        if product.stock < 1 and not product.supplier_stock:
-            continue
+    if product.price_xtr and product.stock > 0:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{product.name} · ⭐ {product.price_xtr} · 库存 {product.stock}",
+                    text=f"⭐ Buy · {product.price_xtr} XTR",
                     callback_data=f"buy:{product.id}",
                 )
             ]
         )
-        plugin_product = PluginProduct(
-            id=product.id,
-            name=product.name,
-            prices={
-                provider: PluginPrice(provider, currency, amount)
-                for provider, (currency, amount) in product.plugin_prices.items()
-            },
-        )
-        plugin_buttons = [
-            button
-            for plugin in registry.plugins
-            if (button := plugin.catalog_button(plugin_product)) is not None
-        ]
-        if plugin_buttons:
-            rows.append(plugin_buttons)
-    rows.append([InlineKeyboardButton(text="📦 我的订单", callback_data="my_orders")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    plugin_product = PluginProduct(
+        id=product.id,
+        name=product.name,
+        prices={
+            provider: PluginPrice(provider, currency, amount)
+            for provider, (currency, amount) in product.plugin_prices.items()
+        },
+    )
+    for plugin in get_plugin_registry().plugins:
+        button = plugin.catalog_button(plugin_product)
+        if button is not None:
+            rows.append([button])
+    raw_category = str(product.category_id) if product.category_id else "all"
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:category:{raw_category}:0")]
+    )
+    delivery = "Instant delivery" if product.supplier_stock or product.stock else "Out of stock"
+    await callback.message.answer(
+        f"<b>{html.escape(product.name)}</b>\n\n"
+        f"{html.escape(product.description or 'No description available.')}\n\n"
+        f"💵 Price: {_product_price(product)}\n"
+        f"⚡ Delivery: {delivery}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
 
 
-@router.message(CommandStart())
-@router.message(Command("shop"))
-async def show_shop(message: Message) -> None:
-    async with SessionFactory() as session:
-        products = await list_products(session)
-    if not products:
-        await message.answer("🛍️ 商店暂时没有可购买的商品。")
-        return
-    await message.answer(
-        "<b>🛍️ TGfakaBOT 商店</b>\n\n请选择商品及支付方式。",
-        reply_markup=_shop_keyboard(products),
+@router.callback_query(F.data == "shop:account")
+async def callback_account(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "👤 <b>My account</b>\n\n"
+        f"Name: {html.escape(callback.from_user.full_name)}\n"
+        f"Telegram ID: <code>{callback.from_user.id}</code>",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📦 My orders", callback_data="my_orders")],
+                [InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "shop:help")
+async def callback_help(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "ℹ️ <b>Help</b>\n\n"
+        "1. Choose a product.\n"
+        "2. Select an available payment method.\n"
+        "3. Complete payment before the order expires.\n"
+        "4. Your digital product will be delivered in Telegram.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+        ),
     )
 
 
@@ -122,16 +294,27 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
             if order.currency == "XTR"
             else f"{order.total_amount / 100:.2f} {order.currency}"
         )
+        status_labels = {
+            "pending_payment": "Awaiting payment",
+            "payment_processing": "Processing",
+            "paid": "Paid",
+            "fulfilled": "Delivered",
+            "expired": "Expired",
+            "payment_exception": "Needs support",
+            "refund_pending": "Refund pending",
+            "refunded": "Refunded",
+        }
         blocks.append(
             f"<b>{html.escape(order.product_name)}</b>\n"
-            f"订单：<code>{order.public_id}</code>\n"
-            f"金额：{amount_text}"
+            f"Order: <code>{order.public_id}</code>\n"
+            f"Amount: {amount_text}\n"
+            f"Status: {status_labels.get(order.status, order.status)}"
         )
         secret_rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"🔐 查看 {order.public_id}",
-                    callback_data=f"order_secret:{order.public_id}",
+                    text=f"View {order.public_id}",
+                    callback_data=f"order_detail:{order.public_id}",
                 )
             ]
         )
@@ -143,8 +326,48 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
     keyboard_rows = secret_rows + ([rows] if rows else [])
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
     await target.answer(
-        f"📦 <b>我的订单 · 第 {page + 1} 页</b>\n\n" + "\n\n".join(blocks),
+        f"📦 <b>My orders · Page {page + 1}</b>\n\n" + "\n\n".join(blocks),
         reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("order_detail:"))
+async def order_detail(callback: CallbackQuery) -> None:
+    await callback.answer()
+    public_id = callback.data.split(":", 1)[1]
+    async with SessionFactory() as session:
+        order = await get_user_order(session, callback.from_user.id, public_id)
+    if order is None:
+        await callback.message.answer("Order not found.")
+        return
+    amount = (
+        f"⭐ {order.total_amount}"
+        if order.currency == "XTR"
+        else f"{order.total_amount / 100:.2f} {order.currency}"
+    )
+    rows = []
+    if order.secret:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔐 View delivered product",
+                    callback_data=f"order_secret:{order.public_id}",
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [InlineKeyboardButton(text="📦 My orders", callback_data="my_orders")],
+            [InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")],
+        ]
+    )
+    await callback.message.answer(
+        "🧾 <b>Order details</b>\n\n"
+        f"Product: {html.escape(order.product_name)}\n"
+        f"Order: <code>{order.public_id}</code>\n"
+        f"Amount: {amount}\n"
+        f"Status: {html.escape(order.status)}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 
@@ -201,6 +424,42 @@ async def support(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("buy:"))
+async def confirm_stars_purchase(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        product_id = uuid.UUID(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.message.answer("Invalid product.")
+        return
+    async with SessionFactory() as session:
+        products = await list_products(session)
+    product = next((item for item in products if item.id == product_id), None)
+    if product is None or product.stock < 1:
+        await callback.message.answer("This product is unavailable.")
+        return
+    await callback.message.answer(
+        "🧾 <b>Confirm purchase</b>\n\n"
+        f"Product: {html.escape(product.name)}\n"
+        f"Price: ⭐ {product.price_xtr} XTR\n"
+        "Delivery: Instant\n\nContinue to Telegram Stars payment?",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Confirm and pay", callback_data=f"buy_confirm:{product.id}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="⬅️ Back", callback_data=f"shop:product:{product.id}"
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("buy_confirm:"))
 async def buy_product(callback: CallbackQuery) -> None:
     await callback.answer()
     try:

@@ -13,6 +13,7 @@ from app.db.base import CardStatus, OrderStatus, PaymentStatus, ProductStatus
 from app.db.models import (
     SKU,
     Card,
+    Category,
     Order,
     OrderItem,
     PaymentCharge,
@@ -32,6 +33,8 @@ class ShopError(Exception):
 @dataclass(slots=True)
 class CatalogProduct:
     id: uuid.UUID
+    category_id: uuid.UUID | None
+    category_name: str | None
     name: str
     description: str
     price_xtr: int
@@ -68,6 +71,8 @@ class DeliveredOrder:
     should_deliver: bool = True
     needs_supplier: bool = False
     order_id: uuid.UUID | None = None
+    status: str = ""
+    created_at: datetime | None = None
 
 
 async def ensure_user(
@@ -93,23 +98,31 @@ async def ensure_user(
     return user
 
 
+@dataclass(slots=True)
+class CatalogCategory:
+    id: uuid.UUID | None
+    name: str
+    product_count: int
+
+
 async def list_products(session: AsyncSession) -> list[CatalogProduct]:
     stock_count = func.count(Card.id).filter(Card.status == CardStatus.AVAILABLE)
     rows = (
         await session.execute(
-            select(Product, SKU, stock_count.label("stock"))
+            select(Product, SKU, Category, stock_count.label("stock"))
             .join(SKU, SKU.product_id == Product.id)
+            .outerjoin(Category, Category.id == Product.category_id)
             .outerjoin(Card, Card.sku_id == SKU.id)
             .where(
                 Product.status == ProductStatus.ACTIVE,
                 SKU.is_active.is_(True),
                 SKU.is_default.is_(True),
             )
-            .group_by(Product.id, SKU.id)
+            .group_by(Product.id, SKU.id, Category.id)
             .order_by(Product.created_at.desc())
         )
     ).all()
-    sku_ids = [sku.id for _, sku, _ in rows]
+    sku_ids = [sku.id for _, sku, _, _ in rows]
     price_rows = (
         await session.execute(
             select(ProductPrice).where(
@@ -134,6 +147,8 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
     return [
         CatalogProduct(
             id=product.id,
+            category_id=product.category_id,
+            category_name=category.name if category else None,
             name=product.name,
             description=product.description,
             price_xtr=sku.price_xtr,
@@ -141,7 +156,21 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             supplier_stock=sku.id in supplier_skus,
             stock=int(stock),
         )
-        for product, sku, stock in rows
+        for product, sku, category, stock in rows
+    ]
+
+
+async def list_catalog_categories(session: AsyncSession) -> list[CatalogCategory]:
+    products = await list_products(session)
+    counts: dict[tuple[uuid.UUID | None, str], int] = {}
+    for product in products:
+        if product.stock < 1 and not product.supplier_stock:
+            continue
+        key = (product.category_id, product.category_name or "全部商品")
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        CatalogCategory(id=category_id, name=name, product_count=count)
+        for (category_id, name), count in sorted(counts.items(), key=lambda item: item[0][1])
     ]
 
 
@@ -527,6 +556,8 @@ async def _delivered_order(
         secret=card_vault.decrypt(card.secret_ciphertext) if include_secret else "",
         duplicate=duplicate,
         should_deliver=include_secret,
+        status=order.status.value,
+        created_at=order.created_at,
     )
 
 
@@ -558,6 +589,8 @@ async def get_user_order(
             if card and order.status == OrderStatus.FULFILLED
             else ""
         ),
+        status=order.status.value,
+        created_at=order.created_at,
     )
 
 
@@ -583,6 +616,8 @@ async def list_user_orders(
             total_amount=order.total_amount,
             currency=order.currency,
             secret="",
+            status=order.status.value,
+            created_at=order.created_at,
         )
         for order, item, card in rows
     ]
