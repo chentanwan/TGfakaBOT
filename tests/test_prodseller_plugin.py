@@ -389,3 +389,15 @@ def test_admin_reviews_manual_usdt_orders_safely() -> None:
     assert 'action="manual_usdt_payment_review"' in payments
     assert "card.status = CardStatus.AVAILABLE" in payments
     assert "reserve_supplier_route" in payments
+
+
+def test_usdt_review_snapshots_destination_and_requires_confirmation() -> None:
+    catalog = Path("app/handlers/catalog.py").read_text()
+    admin = Path("app/handlers/admin.py").read_text()
+    cleanup = Path("app/services/cleanup.py").read_text()
+    assert '"destination": method.destination' in catalog
+    assert "record.destination" in admin
+    assert 'F.data.startswith("adm:usdt:ask:")' in admin
+    assert "create_confirmation" in admin
+    assert "consume_confirmation" in admin
+    assert '"proof_pending"' in cleanup

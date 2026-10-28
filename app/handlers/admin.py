@@ -308,25 +308,65 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
             f"订单：<code>{record.public_id}</code>\n"
             f"用户：<code>{record.telegram_user_id}</code>\n"
             f"商品：{html.escape(record.product_name)}\n"
-            f"网络：{html.escape(record.provider)}\n"
+            f"网络：{html.escape(record.method_label)}\n"
+            f"收款目标：<code>{html.escape(record.destination)}</code>\n"
             f"金额：${record.amount_minor / 100:.2f}\n"
             f"凭证：<code>{html.escape(record.proof)}</code>",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(
                     text="✅ 确认到账",
-                    callback_data=f"adm:usdt:approve:{record.payment_id}",
+                    callback_data=f"adm:usdt:ask:a:{record.payment_id}",
                     style="success",
                 ),
                 InlineKeyboardButton(
                     text="❌ 拒绝",
-                    callback_data=f"adm:usdt:reject:{record.payment_id}",
+                    callback_data=f"adm:usdt:ask:r:{record.payment_id}",
                     style="danger",
                 ),
             ]]),
         )
 
 
-@router.callback_query(F.data.startswith("adm:usdt:approve:"))
+@router.callback_query(F.data.startswith("adm:usdt:ask:"))
+async def ask_usdt_review(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    try:
+        _, _, _, action, raw_payment_id = callback.data.split(":", 4)
+        payment_id = uuid.UUID(raw_payment_id)
+        if action not in {"a", "r"}:
+            raise ValueError
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    from redis.asyncio import Redis
+
+    from app.services.admin_confirmations import create_confirmation
+    redis = Redis.from_url(settings.redis_url)
+    try:
+        token = await create_confirmation(
+            redis, admin_id=callback.from_user.id,
+            action="usdt_approve" if action == "a" else "usdt_reject",
+            order_id=payment_id,
+        )
+    finally:
+        await redis.aclose()
+    label = "确认到账并交付" if action == "a" else "拒绝并释放库存"
+    await callback.answer()
+    await callback.message.answer(
+        f"⚠️ <b>{label}</b>\n\n确认令牌 5 分钟内有效且只能使用一次。",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"adm:usdt:do:{action}:{payment_id}:{token}",
+                style="success" if action == "a" else "danger",
+            )
+        ]]),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:usdt:do:a:"))
 async def approve_usdt_order(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
@@ -337,7 +377,22 @@ async def approve_usdt_order(callback: CallbackQuery) -> None:
     )
 
     try:
-        payment_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        _, _, _, _, raw_payment_id, token = callback.data.split(":", 5)
+        payment_id = uuid.UUID(raw_payment_id)
+        from redis.asyncio import Redis
+
+        from app.services.admin_confirmations import consume_confirmation
+        redis = Redis.from_url(settings.redis_url)
+        try:
+            confirmed = await consume_confirmation(
+                redis, token=token, admin_id=callback.from_user.id,
+                action="usdt_approve", order_id=payment_id,
+            )
+        finally:
+            await redis.aclose()
+        if not confirmed:
+            await callback.answer("确认已失效或已使用", show_alert=True)
+            return
         async with SessionFactory() as session:
             delivery, duplicate = await approve_manual_usdt_payment(
                 session, payment_id=payment_id,
@@ -367,7 +422,7 @@ async def approve_usdt_order(callback: CallbackQuery) -> None:
         )
 
 
-@router.callback_query(F.data.startswith("adm:usdt:reject:"))
+@router.callback_query(F.data.startswith("adm:usdt:do:r:"))
 async def reject_usdt_order(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
@@ -378,7 +433,22 @@ async def reject_usdt_order(callback: CallbackQuery) -> None:
     )
 
     try:
-        payment_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        _, _, _, _, raw_payment_id, token = callback.data.split(":", 5)
+        payment_id = uuid.UUID(raw_payment_id)
+        from redis.asyncio import Redis
+
+        from app.services.admin_confirmations import consume_confirmation
+        redis = Redis.from_url(settings.redis_url)
+        try:
+            confirmed = await consume_confirmation(
+                redis, token=token, admin_id=callback.from_user.id,
+                action="usdt_reject", order_id=payment_id,
+            )
+        finally:
+            await redis.aclose()
+        if not confirmed:
+            await callback.answer("确认已失效或已使用", show_alert=True)
+            return
         async with SessionFactory() as session:
             telegram_user_id, public_id, duplicate = await reject_manual_usdt_payment(
                 session, payment_id=payment_id,

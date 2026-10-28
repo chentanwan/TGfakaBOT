@@ -34,6 +34,7 @@ async def reserve_plugin_payment(
     *,
     order_id: uuid.UUID,
     provider: str,
+    provider_data: dict | None = None,
 ) -> PluginPayment:
     async with session.begin():
         order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
@@ -51,9 +52,12 @@ async def reserve_plugin_payment(
                 status="creating",
                 currency=order.currency,
                 amount_minor=order.total_amount,
+                provider_data=provider_data or {},
             )
             session.add(payment)
             await session.flush()
+        elif provider_data:
+            payment.provider_data = {**payment.provider_data, **provider_data}
         return payment
 
 
@@ -300,6 +304,8 @@ class ManualUsdtReview:
     provider: str
     amount_minor: int
     proof: str
+    destination: str
+    method_label: str
     created_at: object
 
 
@@ -325,7 +331,10 @@ async def list_manual_usdt_reviews(
         ManualUsdtReview(
             payment.id, order.id, order.public_id, user.telegram_user_id,
             item.product_name_snapshot, payment.provider, payment.amount_minor,
-            payment.transaction_id or "", payment.created_at,
+            payment.transaction_id or "",
+            str(payment.provider_data.get("destination") or ""),
+            str(payment.provider_data.get("method_label") or payment.provider),
+            payment.created_at,
         )
         for payment, order, item, user in rows
     ]

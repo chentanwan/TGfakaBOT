@@ -47,7 +47,14 @@ async def release_expired_orders_once() -> int:
                 select(PluginPayment.id).where(
                     PluginPayment.order_id == order.id,
                     PluginPayment.status.in_(
-                        ["creating", "creation_unknown", "waiting", "confirming", "paid"]
+                        [
+                            "creating",
+                            "creation_unknown",
+                            "waiting",
+                            "confirming",
+                            "proof_pending",
+                            "paid",
+                        ]
                     ),
                 )
             )

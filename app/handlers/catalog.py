@@ -849,7 +849,14 @@ async def create_usdt_purchase(
 
         async with SessionFactory() as session:
             await reserve_plugin_payment(
-                session, order_id=order.order_id, provider=method.id
+                session,
+                order_id=order.order_id,
+                provider=method.id,
+                provider_data={
+                    "destination": method.destination,
+                    "method_label": method.label,
+                    "proof_label": method.proof_label,
+                },
             )
     except ShopError as exc:
         await callback.answer(str(exc), show_alert=True)
