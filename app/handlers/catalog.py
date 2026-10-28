@@ -79,15 +79,7 @@ def _home_keyboard(language: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text=text(language, "topup"), callback_data="account:topup"),
                 InlineKeyboardButton(
-                    text=text(language, "methods"), callback_data="account:methods"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
                     text=text(language, "profile"), callback_data="account:profile"
-                ),
-                InlineKeyboardButton(
-                    text=text(language, "api"), callback_data="account:api", style="primary"
                 ),
             ],
             [
