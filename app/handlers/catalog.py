@@ -13,9 +13,11 @@ from aiogram.types import (
 )
 
 from app.core.config import get_settings
+from app.core.i18n import LANGUAGE_NAMES, text
 from app.db.session import SessionFactory
 from app.plugins.base import PluginPrice, PluginProduct
 from app.plugins.registry import get_plugin_registry
+from app.services.accounts import ensure_account, get_account, set_account_language
 from app.services.orders import (
     ShopError,
     cancel_unpaid_order,
@@ -34,17 +36,42 @@ settings = get_settings()
 ORDERS_PAGE_SIZE = 5
 
 
-def _home_keyboard() -> InlineKeyboardMarkup:
+def _home_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🛍 Products", callback_data="shop:categories")],
             [
-                InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
-                InlineKeyboardButton(text="👤 My account", callback_data="shop:account"),
+                InlineKeyboardButton(
+                    text=text(language, "products"),
+                    callback_data="shop:categories",
+                    style="success",
+                ),
+                InlineKeyboardButton(
+                    text=text(language, "balance"), callback_data="account:balance"
+                ),
             ],
             [
-                InlineKeyboardButton(text="ℹ️ Help", callback_data="shop:help"),
-                InlineKeyboardButton(text="💬 Support", url=settings.support_url),
+                InlineKeyboardButton(text=text(language, "topup"), callback_data="account:topup"),
+                InlineKeyboardButton(
+                    text=text(language, "methods"), callback_data="account:methods"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=text(language, "profile"), callback_data="account:profile"
+                ),
+                InlineKeyboardButton(
+                    text=text(language, "api"), callback_data="account:api", style="primary"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=text(language, "language"), callback_data="account:language"
+                ),
+                InlineKeyboardButton(
+                    text=text(language, "support"),
+                    callback_data="account:support",
+                    style="danger",
+                ),
             ],
         ]
     )
@@ -57,18 +84,55 @@ def _product_price(product) -> str:
     return f"⭐ {product.price_xtr}"
 
 
-async def send_home(target: Message, display_name: str) -> None:
+async def send_home(target: Message, telegram_user_id: int) -> None:
+    async with SessionFactory() as session:
+        account = await get_account(session, telegram_user_id)
+    if account is None:
+        await target.answer("Account not found. Send /start again.")
+        return
+    language = account.language_code
     await target.answer(
-        "👋 <b>Welcome to TGfakaBOT</b>\n\n"
-        f"Hello, {html.escape(display_name)}!\n"
-        "Browse digital products, receive instant delivery and manage your orders here.",
-        reply_markup=_home_keyboard(),
+        text(
+            language,
+            "welcome",
+            channel=settings.channel_handle,
+            support=settings.support_handle,
+        )
+    )
+    await target.answer(
+        text(
+            language,
+            "main_menu",
+            balance=f"{account.balance_minor / 100:.2f}",
+            points=account.points,
+        ),
+        reply_markup=_home_keyboard(language),
     )
 
 
 @router.message(CommandStart())
 async def show_home(message: Message) -> None:
-    await send_home(message, message.from_user.full_name)
+    referral = None
+    if message.text and len(message.text.split(maxsplit=1)) == 2:
+        parameter = message.text.split(maxsplit=1)[1].strip()
+        if parameter.lower().startswith("ref_"):
+            referral = parameter
+    async with SessionFactory() as session:
+        await ensure_account(
+            session,
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+            display_name=message.from_user.full_name,
+            telegram_language=message.from_user.language_code,
+            referral_code=referral,
+        )
+    await send_home(message, message.from_user.id)
+
+
+@router.callback_query(F.data == "shop:home")
+async def callback_home(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await send_home(callback.message, callback.from_user.id)
 
 
 @router.message(Command("shop"))
@@ -76,10 +140,170 @@ async def show_shop_command(message: Message) -> None:
     await send_categories(message)
 
 
-@router.callback_query(F.data == "shop:home")
-async def callback_home(callback: CallbackQuery) -> None:
+@router.callback_query(F.data == "account:balance")
+async def account_balance(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_home(callback.message, callback.from_user.full_name)
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+    if account is None:
+        return
+    await callback.message.answer(
+        f"💰 Available balance: ${account.balance_minor / 100:.2f} | ⭐ Points: {account.points}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Top up", callback_data="account:topup")],
+                [InlineKeyboardButton(text="📖 Methods", callback_data="account:methods")],
+                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:profile")
+async def account_profile(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+    if account is None:
+        return
+    username = f"@{account.username}" if account.username else "—"
+    await callback.message.answer(
+        "👤 <b>Your profile</b>\n"
+        f"🆔 Telegram ID: <code>{account.telegram_user_id}</code>\n"
+        f"👤 Username: {html.escape(username)}\n"
+        f"🏅 Tier: {html.escape(account.tier)}\n"
+        f"💵 Balance: ${account.balance_minor / 100:.2f}\n"
+        f"⭐ Points: {account.points}\n"
+        f"📦 Orders: {account.order_count}\n"
+        f"💸 Total spent: ${account.total_spent_minor / 100:.2f}\n"
+        f"🔑 Referral code: <code>{account.referral_code}</code>\n"
+        f"📅 Registered: {account.created_at:%m/%d/%Y}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
+                    InlineKeyboardButton(text="👥 Referral", callback_data="account:referral"),
+                ],
+                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:referral")
+async def account_referral(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+    if account is None:
+        return
+    bot_username = settings.bot_username or "your_bot"
+    link = f"https://t.me/{bot_username}?start={account.referral_code}"
+    await callback.message.answer(
+        "👥 <b>Referral</b>\n\n"
+        f"Link: <code>{html.escape(link)}</code>\n"
+        f"Invited users: {account.referral_count}\n"
+        f"Rewards: ${account.referral_reward_minor / 100:.2f}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="account:profile")]]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:language")
+async def choose_language(callback: CallbackQuery) -> None:
+    await callback.answer()
+    rows = []
+    codes = list(LANGUAGE_NAMES)
+    for index in range(0, 6, 2):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=LANGUAGE_NAMES[code], callback_data=f"account:setlang:{code}"
+                )
+                for code in codes[index : index + 2]
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text=LANGUAGE_NAMES["id"], callback_data="account:setlang:id")]
+    )
+    rows.append([InlineKeyboardButton(text="« Back", callback_data="shop:home")])
+    await callback.message.answer(
+        "🌐 Choose your language:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("account:setlang:"))
+async def save_language(callback: CallbackQuery) -> None:
+    language = callback.data.rsplit(":", 1)[1]
+    async with SessionFactory() as session:
+        await set_account_language(
+            session, telegram_user_id=callback.from_user.id, language_code=language
+        )
+    await callback.answer("Language updated")
+    await send_home(callback.message, callback.from_user.id)
+
+
+@router.callback_query(F.data == "account:support")
+async def account_support(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "🆘 <b>Need help?</b>\n"
+        f"👤 Administrator: {html.escape(settings.administrator_handle)}\n"
+        f"🆘 Support: {html.escape(settings.support_handle)}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"👤 {settings.administrator_handle} ↗",
+                        url=settings.administrator_url,
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=f"🆘 {settings.support_handle} ↗", url=settings.support_url
+                    )
+                ],
+                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:methods")
+async def account_methods(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "📖 <b>Methods</b>\n\nHow to top up: [configure this text]\n\n"
+        "How to buy: choose a product, quantity and payment method.\n\n"
+        "After delivery: save your digital product securely.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="shop:home")]]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:topup")
+async def account_topup_placeholder(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "💳 <b>Top-up methods</b>\n\nPayment integrations will be enabled in the recharge phase.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="shop:home")]]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:api")
+async def account_api_placeholder(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "🔗 <b>API</b>\n\nCustomer API access will be enabled in the API phase.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="shop:home")]]
+        ),
+    )
 
 
 @router.callback_query(F.data == "shop:categories")

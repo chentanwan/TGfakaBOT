@@ -52,6 +52,15 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     username: Mapped[str | None] = mapped_column(String(64))
     display_name: Mapped[str | None] = mapped_column(String(128))
+    language_code: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
+    balance_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    points: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    tier: Mapped[str] = mapped_column(String(32), default="bronze", nullable=False)
+    total_spent_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    order_count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    referral_code: Mapped[str | None] = mapped_column(String(80), unique=True)
+    referred_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    referral_reward_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     status: Mapped[UserStatus] = enum_column(UserStatus, "user_status", UserStatus.ACTIVE)
 
 

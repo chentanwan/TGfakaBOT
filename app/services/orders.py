@@ -84,6 +84,7 @@ async def ensure_user(
             telegram_user_id=telegram_user_id,
             username=username,
             display_name=display_name,
+            referral_code=f"REF_{telegram_user_id}",
         )
         .on_conflict_do_update(
             index_elements=["telegram_user_id"],
