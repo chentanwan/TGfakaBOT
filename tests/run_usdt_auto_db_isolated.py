@@ -203,9 +203,17 @@ async def main() -> None:
             assert order.status == OrderStatus.FULFILLED
             assert card.status == CardStatus.DELIVERED
             assert payment.status == "paid"
-        delivered = [outcome for outcome in (first_order, second_order) if outcome.delivery]
-        duplicates = [outcome for outcome in (first_order, second_order) if not outcome.delivery]
-        assert len(delivered) == 1 and delivered[0].delivery.should_deliver
+        delivered = [
+            outcome
+            for outcome in (first_order, second_order)
+            if outcome.delivery and outcome.delivery.should_deliver
+        ]
+        duplicates = [
+            outcome
+            for outcome in (first_order, second_order)
+            if outcome.delivery and not outcome.delivery.should_deliver
+        ]
+        assert len(delivered) == 1
         assert len(duplicates) == 1 and duplicates[0].state == "paid"
 
         rejected_payment, rejected_order, rejected_card = await make_order(user, 3)
