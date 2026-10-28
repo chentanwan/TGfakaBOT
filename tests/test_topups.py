@@ -37,3 +37,12 @@ def test_concurrent_usdt_proof_duplicates_have_safe_error() -> None:
     source = Path("app/services/plugin_payments.py").read_text()
     assert "except IntegrityError as exc" in source
     assert 'PluginPaymentError("该付款凭证已提交")' in source
+
+
+def test_usdt_payment_proof_formats_are_network_specific() -> None:
+    source = Path("app/services/usdt_methods.py").read_text()
+    assert 'r"0x[0-9a-fA-F]{64}\\Z"' in source
+    assert 'r"[0-9a-fA-F]{64}\\Z"' in source
+    assert 'r"[A-Za-z0-9_-]{6,64}\\Z"' in source
+    assert "normalize_and_validate_proof" in source
+    assert "value = value.lower()" in source

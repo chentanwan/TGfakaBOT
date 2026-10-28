@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import BalanceTopup, User
 from app.services.audit import record_admin_action
+from app.services.usdt_methods import normalize_and_validate_proof
 
 ALLOWED_USDT_TOPUP_METHODS = frozenset(
     {"usdt_binance", "usdt_bep20", "usdt_trc20", "usdt_arbitrum"}
@@ -40,11 +41,7 @@ async def submit_topup(
         raise ValueError("unsupported top-up method")
     if amount_minor < 10:
         raise ValueError("minimum top-up amount is $0.10")
-    proof = proof.strip()
-    if method in {"usdt_bep20", "usdt_arbitrum"}:
-        proof = proof.lower()
-    if len(proof) < 4 or len(proof) > 255:
-        raise ValueError("invalid payment proof")
+    proof = normalize_and_validate_proof(method, proof)
     try:
         async with session.begin():
             user = await session.scalar(

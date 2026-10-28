@@ -12,6 +12,7 @@ from app.db.models import Card, Order, OrderItem, PluginPayment, User
 from app.plugins.registry import get_plugin_registry
 from app.services.audit import record_admin_action
 from app.services.supplier_routing import reserve_supplier_route
+from app.services.usdt_methods import normalize_and_validate_proof
 
 
 class PluginPaymentError(Exception):
@@ -259,11 +260,10 @@ async def submit_manual_usdt_proof(
 ) -> None:
     if not provider.startswith("usdt_"):
         raise PluginPaymentError("不支持的 USDT 支付方式")
-    proof = proof.strip()
-    if provider in {"usdt_bep20", "usdt_arbitrum"}:
-        proof = proof.lower()
-    if len(proof) < 4 or len(proof) > 255:
-        raise PluginPaymentError("付款凭证格式无效")
+    try:
+        proof = normalize_and_validate_proof(provider, proof)
+    except ValueError as exc:
+        raise PluginPaymentError(str(exc)) from exc
     try:
         async with session.begin():
             row = (

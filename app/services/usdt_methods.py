@@ -9,6 +9,9 @@ USDT_PRICE_PROVIDER = "usdt"
 _EVM_ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 _TRON_ADDRESS = re.compile(r"T[1-9A-HJ-NP-Za-km-z]{33}\Z")
 _BINANCE_UID = re.compile(r"[0-9]{4,20}\Z")
+_EVM_TX_HASH = re.compile(r"0x[0-9a-fA-F]{64}\Z")
+_TRON_TX_HASH = re.compile(r"[0-9a-fA-F]{64}\Z")
+_BINANCE_ORDER_ID = re.compile(r"[A-Za-z0-9_-]{6,64}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +36,23 @@ def is_valid_destination(method_id: str, destination: str) -> bool:
     if method_id == "usdt_trc20":
         return bool(_TRON_ADDRESS.fullmatch(value))
     return False
+
+
+def normalize_and_validate_proof(method_id: str, proof: str) -> str:
+    value = proof.strip()
+    if method_id in {"usdt_bep20", "usdt_arbitrum"}:
+        value = value.lower()
+        valid = bool(_EVM_TX_HASH.fullmatch(value))
+    elif method_id == "usdt_trc20":
+        value = value.lower()
+        valid = bool(_TRON_TX_HASH.fullmatch(value))
+    elif method_id == "usdt_binance":
+        valid = bool(_BINANCE_ORDER_ID.fullmatch(value))
+    else:
+        valid = False
+    if not valid:
+        raise ValueError("付款凭证格式无效")
+    return value
 
 
 def configured_usdt_methods(settings: Settings) -> tuple[UsdtMethod, ...]:
