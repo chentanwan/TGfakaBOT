@@ -123,6 +123,7 @@ class SupplierProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_for_profit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     suspension_reason: Mapped[str | None] = mapped_column(Text)
+    routing_priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
 
 class ProductPrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):

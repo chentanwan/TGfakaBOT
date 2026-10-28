@@ -292,3 +292,19 @@ def test_paid_fulfillment_reserves_supplier_route() -> None:
     assert "reserve_supplier_route" in payments
     fulfillment = Path("app/services/supplier_fulfillment.py").read_text()
     assert "SupplierOrder.provider == provider" in fulfillment
+
+
+def test_supplier_routes_by_priority_then_cost() -> None:
+    source = Path("app/services/supplier_routing.py").read_text()
+    assert "SupplierProduct.routing_priority.asc()" in source
+    assert source.index("routing_priority.asc()") < source.index("cost_amount_minor.asc()")
+    assert '"selection_reason": "priority_then_lowest_cost"' in source
+
+
+def test_admin_can_set_audited_supplier_routing_priority() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "plugin:prodseller:priority:" in source
+    assert "路由优先级" in source
+    assert 'action="supplier_routing_priority"' in source
+    assert '"old_priority": old_priority' in source
+    assert '"new_priority": priority' in source

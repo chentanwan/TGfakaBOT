@@ -48,6 +48,10 @@ class CustomPrice(StatesGroup):
     amount = State()
 
 
+class RoutingPriority(StatesGroup):
+    value = State()
+
+
 class ProdsellerPlugin:
     name = PROVIDER
 
@@ -85,6 +89,10 @@ class ProdsellerPlugin:
             self._toggle_mapping, F.data.startswith("plugin:prodseller:togglemapping:")
         )
         self.router.callback_query.register(
+            self._start_routing_priority,
+            F.data.startswith("plugin:prodseller:priority:"),
+        )
+        self.router.callback_query.register(
             self._start_custom_price, F.data.startswith("plugin:prodseller:custom:")
         )
         self.router.callback_query.register(
@@ -100,6 +108,7 @@ class ProdsellerPlugin:
         )
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
         self.router.message.register(self._save_custom_price, CustomPrice.amount)
+        self.router.message.register(self._save_routing_priority, RoutingPriority.value)
         self._bot: Bot | None = None
         self._poll_task: asyncio.Task | None = None
         self._sync_task: asyncio.Task | None = None
@@ -850,6 +859,7 @@ class ProdsellerPlugin:
             f"单件毛利：{f'${profit / 100:.2f}' if profit is not None else '未知'}\n"
             f"上游库存：{'有货' if mapping.in_stock else '缺货'}\n"
             f"映射状态：{'暂停' if mapping.suspended_for_profit else '正常'}\n"
+            f"路由优先级：{mapping.routing_priority}（数字越小越优先）\n"
             f"最近同步：{mapping.last_synced_at or '尚未同步'}",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[
@@ -862,6 +872,11 @@ class ProdsellerPlugin:
                         callback_data=f"plugin:prodseller:togglemapping:{mapping.id}",
                         style="danger",
                     ),
+                ], [
+                    InlineKeyboardButton(
+                        text="🔢 设置路由优先级",
+                        callback_data=f"plugin:prodseller:priority:{mapping.id}",
+                    )
                 ]]
             ),
         )
@@ -924,6 +939,62 @@ class ProdsellerPlugin:
             )
             suspended = mapping.suspended_for_profit
         await callback.answer("映射已暂停" if suspended else "映射已恢复", show_alert=True)
+
+    async def _start_routing_priority(
+        self, callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            mapping_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        await state.set_state(RoutingPriority.value)
+        await state.update_data(supplier_mapping_id=str(mapping_id))
+        await callback.answer()
+        await callback.message.answer("请输入路由优先级 1–1000；数字越小越优先。")
+
+    async def _save_routing_priority(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.from_user.id):
+            return
+        try:
+            priority = int((message.text or "").strip())
+            if not 1 <= priority <= 1000:
+                raise ValueError("优先级必须是 1–1000")
+            data = await state.get_data()
+            mapping_id = uuid.UUID(data["supplier_mapping_id"])
+            async with SessionFactory() as session, session.begin():
+                mapping = await session.scalar(
+                    select(SupplierProduct)
+                    .where(
+                        SupplierProduct.id == mapping_id,
+                        SupplierProduct.provider == PROVIDER,
+                    )
+                    .with_for_update()
+                )
+                if mapping is None:
+                    raise ValueError("映射不存在")
+                old_priority = mapping.routing_priority
+                mapping.routing_priority = priority
+                await record_admin_action(
+                    session,
+                    admin_telegram_id=message.from_user.id,
+                    action="supplier_routing_priority",
+                    target_type="supplier_product",
+                    target_id=str(mapping.id),
+                    details={
+                        "provider": PROVIDER,
+                        "old_priority": old_priority,
+                        "new_priority": priority,
+                    },
+                )
+        except (ValueError, KeyError) as exc:
+            await message.answer(f"❌ {html.escape(str(exc) or '优先级无效')}")
+            return
+        await state.clear()
+        await message.answer(f"✅ 路由优先级已设置为 {priority}。")
 
     async def _apply_suggested_price(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):

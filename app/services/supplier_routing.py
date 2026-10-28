@@ -52,7 +52,11 @@ async def reserve_supplier_route(
             SupplierProduct.requires_customer_email.is_(False),
             SupplierProduct.cost_currency == order.currency,
         )
-        .order_by(SupplierProduct.cost_amount_minor.asc(), SupplierProduct.provider.asc())
+        .order_by(
+            SupplierProduct.routing_priority.asc(),
+            SupplierProduct.cost_amount_minor.asc(),
+            SupplierProduct.provider.asc(),
+        )
         .with_for_update(skip_locked=True)
         .limit(1)
     )
@@ -69,6 +73,8 @@ async def reserve_supplier_route(
                     "provider": mapping.provider,
                     "external_product_id": mapping.external_product_id,
                     "unit_cost_minor": mapping.cost_amount_minor,
+                    "routing_priority": mapping.routing_priority,
+                    "selection_reason": "priority_then_lowest_cost",
                 }
             },
         )
