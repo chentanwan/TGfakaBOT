@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     api_docs_url: str = "https://example.com/api-docs"
     referral_reward_percent: int = 0
     points_per_usd: int = 1
+    tier_silver_spend_minor: int = 10000
+    tier_gold_spend_minor: int = 50000
+    tier_platinum_spend_minor: int = 100000
     binance_pay_uid: str = ""
     minimum_topup_minor: int = 10
     usdt_bep20_address: str = ""

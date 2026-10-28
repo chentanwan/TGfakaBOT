@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import card_vault
 from app.db.base import CardStatus, ProductStatus
 from app.db.models import SKU, Card, Product
+from app.services.audit import record_admin_action
 
 
 @dataclass(slots=True)
@@ -160,7 +161,8 @@ async def find_admin_user(session: AsyncSession, telegram_user_id: int) -> Admin
 
 
 async def adjust_user_balance(
-    session: AsyncSession, *, telegram_user_id: int, delta_minor: int
+    session: AsyncSession, *, telegram_user_id: int, delta_minor: int,
+    admin_telegram_id: int | None = None,
 ) -> int:
     from app.db.models import User
     if delta_minor == 0:
@@ -174,6 +176,12 @@ async def adjust_user_balance(
         if user.balance_minor + delta_minor < 0:
             raise ValueError("余额不能变成负数")
         user.balance_minor += delta_minor
+        if admin_telegram_id is not None:
+            await record_admin_action(
+                session, admin_telegram_id=admin_telegram_id, action="balance_adjust",
+                target_type="user", target_id=str(telegram_user_id),
+                details={"delta_minor": delta_minor, "balance_minor": user.balance_minor},
+            )
         return user.balance_minor
 
 

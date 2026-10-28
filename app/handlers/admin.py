@@ -414,7 +414,8 @@ async def admin_balance_save(message: Message, state: FSMContext) -> None:
         telegram_id = int(data["adjust_user_id"])
         async with SessionFactory() as session:
             balance = await adjust_user_balance(
-                session, telegram_user_id=telegram_id, delta_minor=delta_minor
+                session, telegram_user_id=telegram_id, delta_minor=delta_minor,
+                admin_telegram_id=message.from_user.id,
             )
     except (ValueError, KeyError) as exc:
         await message.answer(f"调整失败：{html.escape(str(exc))}")

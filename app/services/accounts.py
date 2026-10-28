@@ -125,6 +125,19 @@ class BalanceDelivery:
     duplicate: bool = False
 
 
+def tier_for_spend(total_spent_minor: int) -> str:
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if total_spent_minor >= settings.tier_platinum_spend_minor:
+        return "platinum"
+    if total_spent_minor >= settings.tier_gold_spend_minor:
+        return "gold"
+    if total_spent_minor >= settings.tier_silver_spend_minor:
+        return "silver"
+    return "bronze"
+
+
 async def purchase_with_balance(
     session: AsyncSession,
     *,
@@ -238,6 +251,20 @@ async def purchase_with_balance(
         user.total_spent_minor += total
         user.order_count += 1
         user.points += (total * max(0, points_per_usd)) // 100
+        user.tier = tier_for_spend(user.total_spent_minor)
+        if user.referred_by_user_id is not None:
+            from app.core.config import get_settings
+
+            reward = total * max(0, get_settings().referral_reward_percent) // 100
+            if reward:
+                referrer = await session.scalar(
+                    select(User)
+                    .where(User.id == user.referred_by_user_id)
+                    .with_for_update()
+                )
+                if referrer is not None:
+                    referrer.balance_minor += reward
+                    referrer.referral_reward_minor += reward
         return BalanceDelivery(
             public_id=order.public_id,
             product_name=product.name,

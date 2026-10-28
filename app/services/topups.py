@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import BalanceTopup, User
+from app.services.audit import record_admin_action
 
 
 @dataclass(slots=True)
@@ -114,6 +115,12 @@ async def review_topup(
             record.rejection_reason = reason[:2000]
         record.reviewed_at = datetime.now(UTC)
         record.reviewed_by_telegram_id = admin_telegram_id
+        if admin_telegram_id:
+            await record_admin_action(
+                session, admin_telegram_id=admin_telegram_id, action="topup_review",
+                target_type="balance_topup", target_id=str(record.id),
+                details={"approved": approve, "amount_minor": record.amount_minor},
+            )
         return record, user.telegram_user_id, False
 
 

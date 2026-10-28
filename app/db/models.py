@@ -361,3 +361,13 @@ class UserApiCredential(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     request_count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+
+class AdminAuditLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "admin_audit_logs"
+    __table_args__ = (Index("ix_admin_audit_created", "created_at"),)
+
+    admin_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(255))
+    details: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
