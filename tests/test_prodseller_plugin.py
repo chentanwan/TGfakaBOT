@@ -234,3 +234,12 @@ def test_normalized_supplier_metadata_is_json_serializable() -> None:
     safe = ProdsellerPlugin._json_safe_remote(remote)
     assert safe["price"] == "0.02"
     json.dumps(safe)
+
+
+def test_supplier_product_import_is_admin_audited() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert 'action="supplier_product_import"' in source
+    assert '"external_product_id": remote["id"]' in source
+    assert '"cost_amount_minor": cost_minor' in source
+    assert "admin_telegram_id=callback.from_user.id" in source
+    assert "admin_telegram_id=message.from_user.id" in source

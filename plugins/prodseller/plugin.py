@@ -16,6 +16,7 @@ from app.db.base import ProductStatus
 from app.db.models import SKU, Product, ProductPrice, SupplierOrder, SupplierProduct
 from app.db.session import SessionFactory
 from app.plugins.base import PluginProduct
+from app.services.audit import record_admin_action
 from app.services.supplier_fulfillment import (
     SupplierFulfillmentError,
     fulfill_supplier_order,
@@ -457,7 +458,9 @@ class ProdsellerPlugin:
             product = next(item for item in products if item["id"] == external_id)
             if product["requiresEmailActivation"]:
                 raise ProdsellerError("该商品需要买家邮箱，当前版本暂不支持")
-            local_id = await self._import_product(product)
+            local_id = await self._import_product(
+                product, admin_telegram_id=callback.from_user.id
+            )
         except StopIteration:
             await callback.message.answer("❌ 上游商品不存在。")
             return
@@ -926,7 +929,9 @@ class ProdsellerPlugin:
         if product["requiresEmailActivation"]:
             await message.answer("❌ 该商品需要买家邮箱激活，当前版本暂不导入。")
             return
-        local_id = await self._import_product(product)
+        local_id = await self._import_product(
+            product, admin_telegram_id=message.from_user.id
+        )
         await state.clear()
         await message.answer(
             "✅ 已导入上游商品。\n"
@@ -941,7 +946,9 @@ class ProdsellerPlugin:
             for key, value in remote.items()
         }
 
-    async def _import_product(self, remote: dict) -> uuid.UUID:
+    async def _import_product(
+        self, remote: dict, *, admin_telegram_id: int | None = None
+    ) -> uuid.UUID:
         cost_minor = self._minor(remote["price"])
         sale_minor = self._sale_price(cost_minor)
         async with SessionFactory() as session, session.begin():
@@ -994,6 +1001,20 @@ class ProdsellerPlugin:
                     metadata_json={"source": PROVIDER},
                 )
             )
+            if admin_telegram_id is not None:
+                await record_admin_action(
+                    session,
+                    admin_telegram_id=admin_telegram_id,
+                    action="supplier_product_import",
+                    target_type="product",
+                    target_id=str(product.id),
+                    details={
+                        "provider": PROVIDER,
+                        "external_product_id": remote["id"],
+                        "cost_amount_minor": cost_minor,
+                        "suggested_sale_minor": sale_minor,
+                    },
+                )
             return product.id
 
     async def _sync_existing(
