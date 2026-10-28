@@ -242,8 +242,12 @@ class PluginPayment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "plugin_payments"
     __table_args__ = (
         CheckConstraint("amount_minor >= 1", name="positive_amount_minor"),
-        UniqueConstraint("provider", "external_id"),
-        UniqueConstraint("provider", "transaction_id"),
+        UniqueConstraint(
+            "provider", "external_id", name="uq_plugin_payments_provider_external_id"
+        ),
+        UniqueConstraint(
+            "provider", "transaction_id", name="uq_plugin_payments_provider_transaction_id"
+        ),
         Index("ix_plugin_payments_provider_status", "provider", "status"),
     )
 
