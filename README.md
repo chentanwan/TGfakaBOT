@@ -203,7 +203,7 @@ The ProdSeller exception queue supports `all`, `failed`, `unknown`, `pending`, a
 
 ## Full storefront capabilities / 完整商城能力
 
-The current version supports seven user languages (`en`, `fr`, `ar`, `ru`, `zh`, `es`, `id`), USD account balances, points and configurable tiers, referrals, multi-plan products, quantity purchases, transactionally safe balance delivery, Telegram Stars, configurable Binance Pay/BEP20/TRC20/Arbitrum USDT payments, ProdSeller, and manual top-up/payment review, customer API keys, restock broadcasts, and administrator user/broadcast controls.
+The current version supports seven user languages (`en`, `fr`, `ar`, `ru`, `zh`, `es`, `id`), USD account balances, points and configurable tiers, referrals, multi-plan products, quantity purchases, transactionally safe balance delivery, Telegram Stars, configurable Binance Pay/BEP20/TRC20/Arbitrum USDT payments, ProdSeller, and manual top-up/payment review, restock broadcasts, and administrator user/broadcast controls.
 
 ### Required account configuration
 
@@ -241,7 +241,6 @@ This command is idempotent. It creates three example products from `examples/pro
 - Account money and manual top-ups are denominated in USD cents.
 - Default tier thresholds are $100 / $500 / $1000.
 - Referral rewards apply to successful balance purchases and credit the referrer balance.
-- Public customer API access should be placed behind HTTPS and reverse-proxy rate limiting in addition to application limits.
 
 ## Automatic USDT verification
 

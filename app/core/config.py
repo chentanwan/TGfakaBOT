@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     support_url: str = "https://t.me/cclchat_bot"
     administrator_handle: str = "@admin"
     administrator_url: str = "https://t.me/admin"
-    api_docs_url: str = "https://example.com/api-docs"
     referral_reward_percent: int = 0
     points_per_usd: int = 1
     tier_silver_spend_minor: int = 10000

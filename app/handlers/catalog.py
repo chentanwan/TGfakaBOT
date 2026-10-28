@@ -28,7 +28,6 @@ from app.services.accounts import (
     purchase_with_balance,
     set_account_language,
 )
-from app.services.api_keys import get_api_credential, rotate_api_key
 from app.services.orders import (
     ShopError,
     cancel_unpaid_order,
@@ -380,11 +379,6 @@ async def account_balance(callback: CallbackQuery) -> None:
                 [InlineKeyboardButton(text=text(language, "topup"), callback_data="account:topup")],
                 [
                     InlineKeyboardButton(
-                        text=text(language, "methods"), callback_data="account:methods"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
                         text=text(language, "topup_history"), callback_data="account:topups"
                     )
                 ],
@@ -532,19 +526,6 @@ async def account_support(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data == "account:methods")
-async def account_methods(callback: CallbackQuery) -> None:
-    await callback.answer()
-    await callback.message.answer(
-        "📖 <b>Methods</b>\n\nHow to top up: [configure this text]\n\n"
-        "How to buy: choose a product, quantity and payment method.\n\n"
-        "After delivery: save your digital product securely.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="shop:home")]]
-        ),
-    )
-
-
 @router.callback_query(F.data == "account:topup")
 async def account_topup(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
@@ -651,60 +632,6 @@ async def manual_topup_proof(message: Message, state: FSMContext) -> None:
         f"{status_text}\nReference: <code>{record.id}</code>",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="« Main menu", callback_data="shop:home")]]
-        ),
-    )
-
-
-@router.callback_query(F.data == "account:api")
-async def account_api(callback: CallbackQuery) -> None:
-    await callback.answer()
-    async with SessionFactory() as session:
-        account = await get_account(session, callback.from_user.id)
-        credential = await get_api_credential(session, callback.from_user.id)
-    if account is None:
-        return
-    key_text = (
-        f"<code>{html.escape(credential.prefix)}••••••••</code>"
-        if credential.prefix
-        else "Not generated"
-    )
-    last_used = (
-        credential.last_used_at.strftime("%m/%d/%Y %H:%M UTC")
-        if credential.last_used_at
-        else "Never"
-    )
-    await callback.message.answer(
-        "🔗 <b>Customer API</b>\n\n"
-        f"API Key: {key_text}\n"
-        f"Balance: ${account.balance_minor / 100:.2f}\n"
-        f"Requests: {credential.request_count}\n"
-        f"Last used: {last_used}\n"
-        f"Documentation: {html.escape(settings.api_docs_url)}\n\n"
-        "For security, the complete key is shown only immediately after generation.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🔄 Regenerate Key", callback_data="account:api:rotate"
-                    )
-                ],
-                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
-            ]
-        ),
-    )
-
-
-@router.callback_query(F.data == "account:api:rotate")
-async def account_api_rotate(callback: CallbackQuery) -> None:
-    await callback.answer()
-    async with SessionFactory() as session:
-        api_key = await rotate_api_key(session, callback.from_user.id)
-    await callback.message.answer(
-        "🔑 <b>Your new API Key</b>\n\n"
-        f"<code>{html.escape(api_key)}</code>\n\n"
-        "Save it now. It will not be shown in full again, and the previous key is invalid.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="« API", callback_data="account:api")]]
         ),
     )
 

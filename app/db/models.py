@@ -352,18 +352,6 @@ class BalanceTopup(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     rejection_reason: Mapped[str | None] = mapped_column(Text)
 
 
-class UserApiCredential(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = "user_api_credentials"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), unique=True, nullable=False
-    )
-    key_prefix: Mapped[str] = mapped_column(String(20), nullable=False)
-    key_hash: Mapped[bytes] = mapped_column(LargeBinary, unique=True, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    request_count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-
 class AdminAuditLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "admin_audit_logs"
     __table_args__ = (Index("ix_admin_audit_created", "created_at"),)
