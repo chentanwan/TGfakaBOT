@@ -376,3 +376,16 @@ def test_direct_usdt_purchase_uses_neutral_price_and_manual_proof() -> None:
     assert '"usdt" if payment_provider.startswith("usdt_")' in orders
     assert 'payment.status = "proof_pending"' in payments
     assert "PluginPayment.transaction_id == proof" in payments
+
+
+def test_admin_reviews_manual_usdt_orders_safely() -> None:
+    admin = Path("app/handlers/admin.py").read_text()
+    payments = Path("app/services/plugin_payments.py").read_text()
+    assert 'text="₮ USDT 订单审核"' in admin
+    assert 'F.data == "adm:usdt:list"' in admin
+    assert "approve_manual_usdt_payment" in admin
+    assert "reject_manual_usdt_payment" in admin
+    assert 'PluginPayment.status == "proof_pending"' in payments
+    assert 'action="manual_usdt_payment_review"' in payments
+    assert "card.status = CardStatus.AVAILABLE" in payments
+    assert "reserve_supplier_route" in payments

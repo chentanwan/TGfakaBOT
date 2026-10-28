@@ -65,6 +65,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📦 商品与库存", callback_data="adm:list")],
         [InlineKeyboardButton(text="🏭 供应商管理", callback_data="adm:suppliers")],
         [InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list")],
+        [InlineKeyboardButton(text="₮ USDT 订单审核", callback_data="adm:usdt:list")],
         [InlineKeyboardButton(text="👤 用户查询", callback_data="adm:user:find")],
         [InlineKeyboardButton(text="📣 全体广播", callback_data="adm:broadcast")],
         [InlineKeyboardButton(text="⚠️ 支付异常", callback_data="adm:pex:list")],
@@ -284,6 +285,114 @@ async def product_toggle(callback: CallbackQuery) -> None:
         await callback.answer(str(exc), show_alert=True)
         return
     await callback.answer(f"已切换为 {status.value}", show_alert=True)
+
+
+
+
+@router.callback_query(F.data == "adm:usdt:list")
+async def pending_usdt_orders(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    from app.services.plugin_payments import list_manual_usdt_reviews
+
+    await callback.answer()
+    async with SessionFactory() as session:
+        records = await list_manual_usdt_reviews(session)
+    if not records:
+        await callback.message.answer("当前没有待审核 USDT 商品订单。")
+        return
+    for record in records:
+        await callback.message.answer(
+            "₮ <b>待审核 USDT 商品订单</b>\n"
+            f"订单：<code>{record.public_id}</code>\n"
+            f"用户：<code>{record.telegram_user_id}</code>\n"
+            f"商品：{html.escape(record.product_name)}\n"
+            f"网络：{html.escape(record.provider)}\n"
+            f"金额：${record.amount_minor / 100:.2f}\n"
+            f"凭证：<code>{html.escape(record.proof)}</code>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="✅ 确认到账",
+                    callback_data=f"adm:usdt:approve:{record.payment_id}",
+                    style="success",
+                ),
+                InlineKeyboardButton(
+                    text="❌ 拒绝",
+                    callback_data=f"adm:usdt:reject:{record.payment_id}",
+                    style="danger",
+                ),
+            ]]),
+        )
+
+
+@router.callback_query(F.data.startswith("adm:usdt:approve:"))
+async def approve_usdt_order(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    from app.services.plugin_payments import (
+        PluginPaymentError,
+        approve_manual_usdt_payment,
+    )
+
+    try:
+        payment_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        async with SessionFactory() as session:
+            delivery, duplicate = await approve_manual_usdt_payment(
+                session, payment_id=payment_id,
+                admin_telegram_id=callback.from_user.id,
+            )
+    except (ValueError, PluginPaymentError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("该记录已处理" if duplicate else "已确认到账", show_alert=True)
+    if duplicate:
+        return
+    if delivery.needs_supplier and delivery.order_id:
+        for plugin in get_plugin_registry().supplier_plugins:
+            if await plugin.fulfill_paid_order(callback.bot, delivery):
+                return
+    elif delivery.should_deliver:
+        await callback.bot.send_message(
+            delivery.telegram_user_id,
+            "✅ <b>USDT payment confirmed</b>\n\n"
+            f"Order: <code>{delivery.public_id}</code>\n"
+            f"Product: {html.escape(delivery.product_name)}\n"
+            f"Secret: <code>{html.escape(delivery.secret)}</code>",
+        )
+    elif delivery.exception_message:
+        await callback.bot.send_message(
+            delivery.telegram_user_id, html.escape(delivery.exception_message)
+        )
+
+
+@router.callback_query(F.data.startswith("adm:usdt:reject:"))
+async def reject_usdt_order(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    from app.services.plugin_payments import (
+        PluginPaymentError,
+        reject_manual_usdt_payment,
+    )
+
+    try:
+        payment_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        async with SessionFactory() as session:
+            telegram_user_id, public_id, duplicate = await reject_manual_usdt_payment(
+                session, payment_id=payment_id,
+                admin_telegram_id=callback.from_user.id,
+            )
+    except (ValueError, PluginPaymentError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("该记录已处理" if duplicate else "已拒绝并释放库存", show_alert=True)
+    if not duplicate:
+        await callback.bot.send_message(
+            telegram_user_id,
+            f"❌ USDT payment proof for order <code>{public_id}</code> was rejected.",
+        )
 
 
 @router.callback_query(F.data == "adm:topups:list")

@@ -9,6 +9,7 @@ from app.core.security import card_vault
 from app.db.base import CardStatus, OrderStatus
 from app.db.models import Card, Order, OrderItem, PluginPayment, User
 from app.plugins.registry import get_plugin_registry
+from app.services.audit import record_admin_action
 from app.services.supplier_routing import reserve_supplier_route
 
 
@@ -287,3 +288,129 @@ async def submit_manual_usdt_proof(
         payment.transaction_id = proof
         payment.status = "proof_pending"
         payment.provider_data = {**payment.provider_data, "proof": proof}
+
+
+@dataclass(slots=True)
+class ManualUsdtReview:
+    payment_id: uuid.UUID
+    order_id: uuid.UUID
+    public_id: str
+    telegram_user_id: int
+    product_name: str
+    provider: str
+    amount_minor: int
+    proof: str
+    created_at: object
+
+
+async def list_manual_usdt_reviews(
+    session: AsyncSession, *, limit: int = 30
+) -> list[ManualUsdtReview]:
+    rows = (
+        await session.execute(
+            select(PluginPayment, Order, OrderItem, User)
+            .join(Order, Order.id == PluginPayment.order_id)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .join(User, User.id == Order.user_id)
+            .where(
+                PluginPayment.provider.startswith("usdt_"),
+                PluginPayment.status == "proof_pending",
+                Order.status == OrderStatus.PENDING_PAYMENT,
+            )
+            .order_by(PluginPayment.created_at.asc())
+            .limit(limit)
+        )
+    ).all()
+    return [
+        ManualUsdtReview(
+            payment.id, order.id, order.public_id, user.telegram_user_id,
+            item.product_name_snapshot, payment.provider, payment.amount_minor,
+            payment.transaction_id or "", payment.created_at,
+        )
+        for payment, order, item, user in rows
+    ]
+
+
+async def approve_manual_usdt_payment(
+    session: AsyncSession,
+    *,
+    payment_id: uuid.UUID,
+    admin_telegram_id: int,
+) -> tuple[PluginDelivery, bool]:
+    payment = await session.scalar(select(PluginPayment).where(PluginPayment.id == payment_id))
+    if payment is None or not payment.provider.startswith("usdt_"):
+        raise PluginPaymentError("USDT 支付记录不存在")
+    if payment.status == "paid":
+        order = await session.get(Order, payment.order_id)
+        if order is None:
+            raise PluginPaymentError("订单不存在")
+        user = await session.get(User, order.user_id)
+        if user is None:
+            raise PluginPaymentError("用户不存在")
+        return PluginDelivery(user.telegram_user_id, order.public_id, "", "", False), True
+    if payment.status != "proof_pending" or not payment.transaction_id:
+        raise PluginPaymentError("付款凭证尚未处于待审核状态")
+    order = await session.get(Order, payment.order_id)
+    if order is None:
+        raise PluginPaymentError("订单不存在")
+    delivery = await fulfill_plugin_payment(
+        session,
+        provider=payment.provider,
+        merchant_order_id=order.public_id,
+        transaction_id=payment.transaction_id,
+        amount_minor=payment.amount_minor,
+        event={"type": "manual_admin_approval", "admin_id": admin_telegram_id},
+        provider_data={"reviewed_by_telegram_id": admin_telegram_id},
+    )
+    async with session.begin():
+        await record_admin_action(
+            session, admin_telegram_id=admin_telegram_id,
+            action="manual_usdt_payment_review", target_type="plugin_payment",
+            target_id=str(payment_id), details={"approved": True},
+        )
+    return delivery, False
+
+
+async def reject_manual_usdt_payment(
+    session: AsyncSession,
+    *,
+    payment_id: uuid.UUID,
+    admin_telegram_id: int,
+) -> tuple[int, str, bool]:
+    async with session.begin():
+        row = (
+            await session.execute(
+                select(PluginPayment, Order, User)
+                .join(Order, Order.id == PluginPayment.order_id)
+                .join(User, User.id == Order.user_id)
+                .where(PluginPayment.id == payment_id)
+                .with_for_update(of=(PluginPayment, Order))
+            )
+        ).one_or_none()
+        if row is None:
+            raise PluginPaymentError("USDT 支付记录不存在")
+        payment, order, user = row
+        if payment.status == "rejected":
+            return user.telegram_user_id, order.public_id, True
+        if payment.status != "proof_pending" or order.status != OrderStatus.PENDING_PAYMENT:
+            raise PluginPaymentError("付款记录已处理或状态异常")
+        item = await session.scalar(select(OrderItem).where(OrderItem.order_id == order.id))
+        card = (
+            await session.scalar(
+                select(Card).where(Card.order_item_id == item.id).with_for_update()
+            )
+            if item else None
+        )
+        if card and card.status == CardStatus.RESERVED:
+            card.status = CardStatus.AVAILABLE
+            card.order_item_id = None
+            card.reserved_until = None
+        payment.status = "rejected"
+        payment.last_error = "rejected by administrator"
+        order.status = OrderStatus.EXPIRED
+        await record_admin_action(
+            session, admin_telegram_id=admin_telegram_id,
+            action="manual_usdt_payment_review", target_type="plugin_payment",
+            target_id=str(payment.id), details={"approved": False},
+        )
+        return user.telegram_user_id, order.public_id, False
