@@ -2,7 +2,7 @@ import asyncio
 import html
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 
 from aiogram import Bot, F, Router
@@ -236,6 +236,7 @@ class ProdsellerPlugin:
     async def _poll_pending_once(self) -> None:
         from app.db.models import SupplierOrder
 
+        await self._reconcile_missing_external_ids()
         async with SessionFactory() as session:
             pending = (
                 await session.scalars(
@@ -290,6 +291,87 @@ class ProdsellerPlugin:
                 logger.exception(
                     "ProdSeller poll failed for supplier order %s", supplier_order.id
                 )
+
+    async def _reconcile_missing_external_ids(self) -> None:
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
+        async with SessionFactory() as session:
+            missing = (
+                await session.scalars(
+                    select(SupplierOrder).where(
+                        SupplierOrder.provider == PROVIDER,
+                        SupplierOrder.status == "unknown",
+                        SupplierOrder.external_order_id.is_(None),
+                        SupplierOrder.created_at >= cutoff,
+                    ).limit(20)
+                )
+            ).all()
+        if not missing:
+            return
+        history = await self.client.list_orders(page=1, limit=200)
+        upstream_orders = history["orders"]
+        for supplier_order in missing:
+            async with SessionFactory() as session:
+                context = await get_supplier_purchase_context(
+                    session, order_id=supplier_order.order_id, provider=PROVIDER
+                )
+            if context is None:
+                continue
+            candidates = self._reconciliation_candidates(
+                context=context,
+                supplier_created_at=supplier_order.created_at,
+                orders=upstream_orders,
+            )
+            if len(candidates) != 1:
+                if len(candidates) > 1:
+                    await self._save_result(
+                        context.order_id, None, "unknown", None, {},
+                        "上游订单对账发现多个候选，需管理员人工核验",
+                    )
+                continue
+            response = candidates[0]
+            amount_minor = self._minor(response["amount"])
+            await self._save_result(
+                context.order_id, response["orderId"], response["status"],
+                amount_minor, response,
+            )
+            if response["status"] == "delivered":
+                await self._deliver_recovered_order(context.order_id, response)
+
+    @classmethod
+    def _reconciliation_candidates(
+        cls, *, context, supplier_created_at: datetime, orders: list[dict]
+    ) -> list[dict]:
+        earliest = supplier_created_at - timedelta(minutes=5)
+        latest = supplier_created_at + timedelta(hours=2)
+        candidates = []
+        for order in orders:
+            product = order.get("product")
+            created_at = cls._parse_upstream_datetime(order.get("createdAt"))
+            if not isinstance(product, dict) or created_at is None:
+                continue
+            if product.get("id") != context.external_product_id:
+                continue
+            if order.get("quantity", 1) != context.quantity:
+                continue
+            amount_minor = cls._minor(order["amount"])
+            if amount_minor > context.sale_amount_minor:
+                continue
+            if not earliest <= created_at <= latest:
+                continue
+            candidates.append(order)
+        return candidates
+
+    @staticmethod
+    def _parse_upstream_datetime(value: object) -> datetime | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(UTC)
 
     async def _browse(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):

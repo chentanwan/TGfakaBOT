@@ -176,3 +176,21 @@ def test_supplier_polling_honors_retry_after() -> None:
     source = Path("plugins/prodseller/plugin.py").read_text()
     assert "exc.rate_limit.retry_after" in source
     assert "delay = max(delay, exc.rate_limit.retry_after)" in source
+
+
+def test_missing_external_order_reconciliation_is_conservative() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "_reconcile_missing_external_ids" in source
+    assert "await self.client.list_orders(page=1, limit=200)" in source
+    assert 'product.get("id") != context.external_product_id' in source
+    assert 'order.get("quantity", 1) != context.quantity' in source
+    assert "len(candidates) != 1" in source
+    assert "多个候选" in source
+
+
+def test_upstream_reconciliation_rejects_invalid_or_naive_times() -> None:
+    assert ProdsellerPlugin._parse_upstream_datetime(None) is None
+    assert ProdsellerPlugin._parse_upstream_datetime("bad") is None
+    assert ProdsellerPlugin._parse_upstream_datetime("2026-01-01T00:00:00") is None
+    parsed = ProdsellerPlugin._parse_upstream_datetime("2026-01-01T00:00:00Z")
+    assert parsed is not None and parsed.tzinfo is not None
