@@ -104,6 +104,12 @@ def _product_price(product) -> str:
     return f"⭐ {product.price_xtr}"
 
 
+async def _user_language(telegram_user_id: int) -> str:
+    async with SessionFactory() as session:
+        account = await get_account(session, telegram_user_id)
+    return account.language_code if account else settings.bot_language
+
+
 async def send_home(target: Message, telegram_user_id: int) -> None:
     async with SessionFactory() as session:
         account = await get_account(session, telegram_user_id)
@@ -175,7 +181,7 @@ async def show_help_command(message: Message) -> None:
 
 @router.message(Command("shop"))
 async def show_shop_command(message: Message) -> None:
-    await send_categories(message)
+    await send_categories(message, message.from_user.id)
 
 
 @router.callback_query(F.data.startswith("balance:variant:"))
@@ -201,9 +207,11 @@ async def balance_variant(callback: CallbackQuery) -> None:
     if sku is None or price is None:
         await callback.message.answer("Balance purchase is not available for this plan.")
         return
+    language = await _user_language(callback.from_user.id)
     await callback.message.answer(
         f"<b>{html.escape(sku.name)}</b>\n"
-        f"Unit price: ${price.amount_minor / 100:.2f}\n\nChoose quantity:",
+        f"{text(language, 'unit_price')}: ${price.amount_minor / 100:.2f}\n\n"
+        f"{text(language, 'choose_quantity')}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -307,12 +315,13 @@ async def send_balance_confirmation(
             ]
         )
     rows.append([InlineKeyboardButton(text="« Back", callback_data=f"balance:variant:{sku.id}")])
+    language = await _user_language(telegram_user_id)
     await target.answer(
-        "🧾 <b>Confirm purchase</b>\n\n"
+        f"{text(language, 'confirm_purchase')}\n\n"
         f"Product: {html.escape(product.name)} · {html.escape(sku.name)}\n"
-        f"Quantity: {quantity}\n"
-        f"Unit price: ${price.amount_minor / 100:.2f}\n"
-        f"Total: ${total / 100:.2f}\n"
+        f"{text(language, 'quantity')}: {quantity}\n"
+        f"{text(language, 'unit_price')}: ${price.amount_minor / 100:.2f}\n"
+        f"{text(language, 'total')}: ${total / 100:.2f}\n"
         f"Balance: ${account.balance_minor / 100:.2f}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -339,14 +348,16 @@ async def execute_balance_purchase(callback: CallbackQuery) -> None:
         await callback.message.answer(f"❌ {html.escape(str(exc))}")
         return
     delivered = "\n".join(f"<code>{html.escape(value)}</code>" for value in delivery.secrets)
+    language = await _user_language(callback.from_user.id)
     await callback.message.answer(
-        "✅ <b>Purchase completed</b>\n\n"
+        f"{text(language, 'purchase_completed')}\n\n"
         f"Order: <code>{delivery.public_id}</code>\n"
         f"Product: {html.escape(delivery.product_name)}\n"
-        f"Quantity: {delivery.quantity}\n"
-        f"Unit price: ${delivery.unit_price_minor / 100:.2f}\n"
-        f"Total: ${delivery.total_amount_minor / 100:.2f}\n\n"
-        f"Delivery:\n{delivered}\n\nPlease save this information securely."
+        f"{text(language, 'quantity')}: {delivery.quantity}\n"
+        f"{text(language, 'unit_price')}: ${delivery.unit_price_minor / 100:.2f}\n"
+        f"{text(language, 'total')}: ${delivery.total_amount_minor / 100:.2f}\n\n"
+        f"{text(language, 'delivery')}:\n{delivered}\n\n"
+        f"{text(language, 'save_delivery')}"
     )
 
 
@@ -706,12 +717,13 @@ async def account_api_rotate(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "shop:categories")
 async def callback_categories(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_categories(callback.message)
+    await send_categories(callback.message, callback.from_user.id)
 
 
-async def send_categories(target: Message) -> None:
+async def send_categories(target: Message, telegram_user_id: int | None = None) -> None:
     async with SessionFactory() as session:
         categories = await list_catalog_categories(session)
+    language = await _user_language(telegram_user_id) if telegram_user_id else settings.bot_language
     if not categories:
         await target.answer(
             "🛍 No products are available right now.",
@@ -731,7 +743,7 @@ async def send_categories(target: Message) -> None:
     ]
     rows.append([InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")])
     await target.answer(
-        "🛍 <b>Products</b>\n\nChoose a category:",
+        text(language, "choose_category"),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -752,9 +764,10 @@ async def callback_category(callback: CallbackQuery) -> None:
         await callback.message.answer("No products in this category.")
         return
     rows = []
+    language = await _user_language(callback.from_user.id)
     for product in products:
         available = product.stock > 0 or product.supplier_stock
-        stock_text = "In stock" if available else "Out of stock"
+        stock_text = text(language, "in_stock") if available else text(language, "out_of_stock")
         rows.append(
             [
                 InlineKeyboardButton(
@@ -764,10 +777,12 @@ async def callback_category(callback: CallbackQuery) -> None:
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="⬅️ Categories", callback_data="shop:categories")])
+    rows.append(
+        [InlineKeyboardButton(text=text(language, "back"), callback_data="shop:categories")]
+    )
     await callback.message.answer(
-        f"📦 <b>{html.escape(products[0].category_name or 'Products')}</b>\n"
-        f"{len(products)} products · Select a product:",
+        f"📦 <b>{html.escape(products[0].category_name or text(language, 'products'))}</b>\n"
+        f"{len(products)} · {text(language, 'choose_product')}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
