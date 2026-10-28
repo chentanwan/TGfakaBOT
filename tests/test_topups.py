@@ -55,6 +55,10 @@ def test_admin_has_masked_usdt_configuration_health_panel() -> None:
     assert "configured_usdt_methods" in source
     assert "is_valid_destination" in source
     assert "_mask_payment_destination" in source
+    assert "自动核验总开关" in source
+    assert "EVM 确认数" in source
+    assert "查询接口" in source
+    assert "_verification_configuration" in source
     assert 'value[:4]' in source and 'value[-4:]' in source
 
 

@@ -15,6 +15,9 @@ async def main() -> None:
     tron_hex = _tron_hex(tron_address)
     state = {
         "evm_amount": 1_000_000,
+        "tron_token": tron_hex[2:],
+        "tron_destination": tron_hex[2:],
+        "tron_fail": False,
         "evm_status": "0x1",
         "latest": 111,
         "evm_token": token,
@@ -47,11 +50,15 @@ async def main() -> None:
         return web.json_response(
             {
                 "blockNumber": 100,
-                "receipt": {"result": "SUCCESS"},
+                "receipt": {"result": "FAILED" if state["tron_fail"] else "SUCCESS"},
                 "log": [
                     {
-                        "address": tron_hex[2:],
-                        "topics": [TRANSFER, "0" * 64, tron_hex[2:].rjust(64, "0")],
+                        "address": state["tron_token"],
+                        "topics": [
+                            TRANSFER,
+                            "0" * 64,
+                            state["tron_destination"].rjust(64, "0"),
+                        ],
                         "data": hex(1_000_000)[2:],
                     }
                 ],
@@ -158,6 +165,34 @@ async def main() -> None:
             expected_amount_minor=100,
         )
         assert result.state == "confirmed" and result.confirmations == 31
+        state["tron_token"] = "c" * 40
+        result = await verify_usdt_payment(
+            settings,
+            method_id="usdt_trc20",
+            proof="8" * 64,
+            destination=tron_address,
+            expected_amount_minor=100,
+        )
+        assert result.state == "rejected"
+        state["tron_token"] = tron_hex[2:]
+        state["tron_destination"] = "d" * 40
+        result = await verify_usdt_payment(
+            settings,
+            method_id="usdt_trc20",
+            proof="9" * 64,
+            destination=tron_address,
+            expected_amount_minor=100,
+        )
+        assert result.state == "rejected"
+        settings.usdt_tron_api_url = "http://127.0.0.1:1/unavailable"
+        result = await verify_usdt_payment(
+            settings,
+            method_id="usdt_trc20",
+            proof="a" * 64,
+            destination=tron_address,
+            expected_amount_minor=100,
+        )
+        assert result.state == "pending" and result.reason == "链上查询服务暂时不可用"
         result = await verify_usdt_payment(
             settings,
             method_id="usdt_binance",

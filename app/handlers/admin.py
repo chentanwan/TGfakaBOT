@@ -299,12 +299,18 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
     from app.services.usdt_verification import automatic_verification_available
 
     await callback.answer()
-    lines = ["⚙️ <b>支付设置</b>"]
+    lines = [
+        "⚙️ <b>支付设置</b>",
+        f"\n自动核验总开关：{'开启' if settings.usdt_auto_verify_enabled else '关闭'}",
+        f"\nEVM 确认数：{settings.usdt_evm_confirmations}",
+        f" · TRON 确认数：{settings.usdt_tron_confirmations}",
+    ]
     for method in configured_usdt_methods(settings):
         configured = bool(method.destination.strip())
         valid = is_valid_destination(method.id, method.destination)
         visible = method.available
         auto_verify = automatic_verification_available(settings, method.id)
+        endpoint_configured, contract_configured = _verification_configuration(method.id)
         destination = _mask_payment_destination(method.destination) if configured else "未配置"
         lines.append(
             f"\n<b>{html.escape(method.label)}</b>"
@@ -312,9 +318,21 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
             f" · 格式：{'有效' if valid else '无效'}"
             f" · 显示：{'是' if visible else '否'}"
             f" · 自动核验：{'可用' if auto_verify else '不可用'}"
+            f"\n查询接口：{'已配置' if endpoint_configured else '未配置'}"
+            f" · 合约：{'已配置' if contract_configured else '未配置'}"
             f"\n收款目标：<code>{html.escape(destination)}</code>"
         )
     await callback.message.answer("".join(lines))
+
+
+def _verification_configuration(method_id: str) -> tuple[bool, bool]:
+    if method_id == "usdt_bep20":
+        return bool(settings.usdt_bep20_rpc_url), bool(settings.usdt_bep20_token_contract)
+    if method_id == "usdt_arbitrum":
+        return bool(settings.usdt_arbitrum_rpc_url), bool(settings.usdt_arbitrum_token_contract)
+    if method_id == "usdt_trc20":
+        return bool(settings.usdt_tron_api_url), bool(settings.usdt_trc20_token_contract)
+    return False, False
 
 
 def _mask_payment_destination(value: str) -> str:
