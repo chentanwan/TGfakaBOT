@@ -18,7 +18,10 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+    marker = bind.execute(
+        sa.text("SELECT to_regclass('_tgfakabot_schema_bootstrap')")
+    ).scalar_one_or_none()
+    if marker is not None:
         return
     op.add_column(
         "payment_charges", sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True)

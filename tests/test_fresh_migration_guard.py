@@ -13,4 +13,4 @@ def test_followup_migrations_skip_after_metadata_bootstrap() -> None:
     assert followups
     for path in followups:
         source = path.read_text()
-        assert 'has_table("_tgfakabot_schema_bootstrap")' in source, path.name
+        assert "SELECT to_regclass('_tgfakabot_schema_bootstrap')" in source, path.name
