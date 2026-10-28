@@ -1207,7 +1207,7 @@ class ProdsellerPlugin:
         await message.answer(
             "✅ 已导入上游商品。\n"
             f"本地商品 ID：<code>{local_id}</code>\n"
-            "请在商品列表设置 BEpusdt 美元售价后再上架销售。"
+            "请在商品列表设置 USDT 美元售价后再上架销售。"
         )
 
     @staticmethod

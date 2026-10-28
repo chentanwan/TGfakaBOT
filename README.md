@@ -140,7 +140,6 @@ alembic revision --autogenerate -m "describe change"
 
 - Long polling is the default Telegram update mode.
 - User-facing main/account menus support seven languages; some provider-specific and deep workflow messages remain English or Chinese.
-- CryptoBot production verification requires an operator-provided Crypto Pay token and public HTTPS callback.
 - Payment exceptions can be fulfilled with a reserved/new card or refunded from the admin panel.
 - Dangerous admin actions use Redis-backed, single-use confirmation tokens.
 - `/orders` is paginated; `/terms`, `/support`, and `/paysupport` support Stars users.
@@ -195,7 +194,7 @@ Each supplier plugin owns independent pricing and synchronization variables. Pro
 
 The ProdSeller admin menu now includes a paginated upstream catalog with cost, suggested USD sale price, stock, and one-click draft import. The supplier exception queue lists pending, paid, failed, and unknown purchases. A recovery action requires an administrator evidence note, queries the authoritative upstream order, records the administrator/time/note audit, and only delivers a key when the upstream status is `delivered`.
 
-Automatic product synchronization enforces the configured profit floor. If an active BEpusdt sale price falls below `upstream cost + percentage profit + fixed profit`, the payment price is disabled and the supplier mapping is marked as profit-suspended; it is never silently increased. An administrator must review and re-enable a safe price.
+Automatic product synchronization enforces the configured profit floor. If an active USDT sale price falls below `upstream cost + percentage profit + fixed profit`, the payment price is disabled and the supplier mapping is marked as profit-suspended; it is never silently increased. An administrator must review and re-enable a safe price.
 
 
 ### Supplier operations controls
@@ -204,7 +203,7 @@ The ProdSeller exception queue supports `all`, `failed`, `unknown`, `pending`, a
 
 ## Full storefront capabilities / 完整商城能力
 
-The current version supports seven user languages (`en`, `fr`, `ar`, `ru`, `zh`, `es`, `id`), USD account balances, points and configurable tiers, referrals, multi-plan products, quantity purchases, transactionally safe balance delivery, Telegram Stars, BEpusdt, ProdSeller, manual top-up review, optional CryptoBot top-ups, customer API keys, restock broadcasts, and administrator user/broadcast controls.
+The current version supports seven user languages (`en`, `fr`, `ar`, `ru`, `zh`, `es`, `id`), USD account balances, points and configurable tiers, referrals, multi-plan products, quantity purchases, transactionally safe balance delivery, Telegram Stars, configurable Binance Pay/BEP20/TRC20/Arbitrum USDT payments, ProdSeller, and manual top-up/payment review, customer API keys, restock broadcasts, and administrator user/broadcast controls.
 
 ### Required account configuration
 
@@ -233,8 +232,7 @@ This command is idempotent. It creates three example products from `examples/pro
 
 ### Payment and deployment notes
 
-- CryptoBot requires a real `CRYPTOBOT_API_TOKEN` and a public HTTPS webhook route to `/plugins/cryptobot/notify`; leave `plugins.cryptobot` out of `PLUGIN_MODULES` until configured.
-- BEpusdt and ProdSeller remain independent plugins and retain their existing callback, idempotency and recovery controls.
+- ProdSeller remains an independent supplier plugin with idempotency and recovery controls.
 - `RESTOCK_BROADCAST_CHAT_ID` is optional. The bot must be permitted to post in that channel/group.
 - Run `alembic upgrade head` before every release. Back up PostgreSQL and the card encryption key before production migration.
 
@@ -243,5 +241,4 @@ This command is idempotent. It creates three example products from `examples/pro
 - Account money and manual top-ups are denominated in USD cents.
 - Default tier thresholds are $100 / $500 / $1000.
 - Referral rewards apply to successful balance purchases and credit the referrer balance.
-- CryptoBot invoices use USDT and credit the submitted USD amount after an exact callback amount match.
 - Public customer API access should be placed behind HTTPS and reverse-proxy rate limiting in addition to application limits.

@@ -27,7 +27,7 @@ async def test_plugin_payment_fulfills_only_once(db_session):
         db_session.add(
             ProductPrice(
                 sku_id=sku.id,
-                provider="bepusdt",
+                provider="usdt_trc20",
                 currency="CNY",
                 amount_minor=990,
                 is_active=True,
@@ -40,12 +40,12 @@ async def test_plugin_payment_fulfills_only_once(db_session):
         username=None,
         display_name="Plugin Buyer",
         product_id=product.id,
-        payment_provider="bepusdt",
+        payment_provider="usdt_trc20",
     )
-    await reserve_plugin_payment(db_session, order_id=order.order_id, provider="bepusdt")
+    await reserve_plugin_payment(db_session, order_id=order.order_id, provider="usdt_trc20")
     first = await fulfill_plugin_payment(
         db_session,
-        provider="bepusdt",
+        provider="usdt_trc20",
         merchant_order_id=order.public_id,
         transaction_id="chain-tx-1",
         amount_minor=990,
@@ -53,7 +53,7 @@ async def test_plugin_payment_fulfills_only_once(db_session):
     )
     second = await fulfill_plugin_payment(
         db_session,
-        provider="bepusdt",
+        provider="usdt_trc20",
         merchant_order_id=order.public_id,
         transaction_id="chain-tx-1",
         amount_minor=990,

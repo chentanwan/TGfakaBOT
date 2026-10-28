@@ -18,5 +18,8 @@ def test_duplicate_payment_proof_is_rejected() -> None:
 
 def test_manual_topup_has_cancel_and_all_method_buttons() -> None:
     source = Path("app/handlers/catalog.py").read_text()
-    for text in ("Binance Pay", "CryptoBot", "USDT BEP20 (BSC)", "topup:cancel"):
-        assert text in source
+    methods = Path("app/services/usdt_methods.py").read_text()
+    for text in ("Binance Pay", "USDT BEP20 (BSC)", "USDT TRC20 (TRON)", "USDT Arbitrum"):
+        assert text in methods
+    assert "topup:cancel" in source
+    assert "CryptoBot" not in source

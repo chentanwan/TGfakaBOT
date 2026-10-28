@@ -37,7 +37,7 @@ async def test_supplier_backed_order_can_deliver_without_local_stock(db_session)
                 ),
                 ProductPrice(
                     sku_id=sku.id,
-                    provider="bepusdt",
+                    provider="usdt_trc20",
                     currency="USD",
                     amount_minor=500,
                     is_active=True,
@@ -50,7 +50,7 @@ async def test_supplier_backed_order_can_deliver_without_local_stock(db_session)
         username=None,
         display_name="Supplier Buyer",
         product_id=product.id,
-        payment_provider="bepusdt",
+        payment_provider="usdt_trc20",
     )
     delivery = await fulfill_supplier_order(
         db_session,
