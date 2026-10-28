@@ -41,6 +41,9 @@ class CatalogProduct:
     plugin_prices: dict[str, tuple[str, int]]
     supplier_stock: bool
     stock: int
+    sku_id: uuid.UUID
+    sku_name: str
+    balance_price_minor: int | None
 
 
 @dataclass(slots=True)
@@ -156,6 +159,11 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             plugin_prices=prices_by_sku.get(sku.id, {}),
             supplier_stock=sku.id in supplier_skus,
             stock=int(stock),
+            sku_id=sku.id,
+            sku_name=sku.name,
+            balance_price_minor=(
+                prices_by_sku.get(sku.id, {}).get("balance", ("USD", None))[1]
+            ),
         )
         for product, sku, category, stock in rows
     ]
@@ -175,6 +183,61 @@ async def list_catalog_categories(session: AsyncSession) -> list[CatalogCategory
 
 async def get_product(session: AsyncSession, product_id: uuid.UUID) -> CatalogProduct | None:
     return next((p for p in await list_products(session) if p.id == product_id), None)
+
+
+async def list_product_variants(
+    session: AsyncSession, product_id: uuid.UUID
+) -> list[CatalogProduct]:
+    products = await list_products(session)
+    default = next((item for item in products if item.id == product_id), None)
+    if default is None:
+        return []
+    stock_count = func.count(Card.id).filter(Card.status == CardStatus.AVAILABLE)
+    rows = (
+        await session.execute(
+            select(SKU, stock_count.label("stock"))
+            .outerjoin(Card, Card.sku_id == SKU.id)
+            .where(SKU.product_id == product_id, SKU.is_active.is_(True))
+            .group_by(SKU.id)
+            .order_by(SKU.is_default.desc(), SKU.created_at.asc())
+        )
+    ).all()
+    sku_ids = [sku.id for sku, _ in rows]
+    prices = (
+        await session.scalars(
+            select(ProductPrice).where(
+                ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
+            )
+        )
+    ).all() if sku_ids else []
+    suppliers = (
+        await session.scalars(
+            select(SupplierProduct).where(SupplierProduct.sku_id.in_(sku_ids))
+        )
+    ).all() if sku_ids else []
+    supplier_stock = {item.sku_id for item in suppliers if item.in_stock}
+    prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
+    for price in prices:
+        prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
+            price.currency, price.amount_minor
+        )
+    return [
+        CatalogProduct(
+            id=default.id,
+            category_id=default.category_id,
+            category_name=default.category_name,
+            name=default.name,
+            description=default.description,
+            price_xtr=sku.price_xtr,
+            plugin_prices=prices_by_sku.get(sku.id, {}),
+            supplier_stock=sku.id in supplier_stock,
+            stock=int(stock),
+            sku_id=sku.id,
+            sku_name=sku.name,
+            balance_price_minor=prices_by_sku.get(sku.id, {}).get("balance", ("USD", None))[1],
+        )
+        for sku, stock in rows
+    ]
 
 
 async def create_order(

@@ -1,8 +1,11 @@
 import html
+import secrets
 import uuid
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -17,13 +20,19 @@ from app.core.i18n import LANGUAGE_NAMES, text
 from app.db.session import SessionFactory
 from app.plugins.base import PluginPrice, PluginProduct
 from app.plugins.registry import get_plugin_registry
-from app.services.accounts import ensure_account, get_account, set_account_language
+from app.services.accounts import (
+    ensure_account,
+    get_account,
+    purchase_with_balance,
+    set_account_language,
+)
 from app.services.orders import (
     ShopError,
     cancel_unpaid_order,
     create_order,
     get_user_order,
     list_catalog_categories,
+    list_product_variants,
     list_products,
     list_user_orders,
     match_and_fulfill_payment,
@@ -34,6 +43,10 @@ from app.services.orders import (
 router = Router(name="catalog")
 settings = get_settings()
 ORDERS_PAGE_SIZE = 5
+
+
+class CustomQuantity(StatesGroup):
+    quantity = State()
 
 
 def _home_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -138,6 +151,186 @@ async def callback_home(callback: CallbackQuery) -> None:
 @router.message(Command("shop"))
 async def show_shop_command(message: Message) -> None:
     await send_categories(message)
+
+
+@router.callback_query(F.data.startswith("balance:variant:"))
+async def balance_variant(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        sku_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    from sqlalchemy import select
+
+    from app.db.models import SKU, ProductPrice
+
+    async with SessionFactory() as session:
+        sku = await session.get(SKU, sku_id)
+        price = await session.scalar(
+            select(ProductPrice).where(
+                ProductPrice.sku_id == sku_id,
+                ProductPrice.provider == "balance",
+                ProductPrice.is_active.is_(True),
+            )
+        )
+    if sku is None or price is None:
+        await callback.message.answer("Balance purchase is not available for this plan.")
+        return
+    await callback.message.answer(
+        f"<b>{html.escape(sku.name)}</b>\n"
+        f"Unit price: ${price.amount_minor / 100:.2f}\n\nChoose quantity:",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="1", callback_data=f"balance:qty:{sku_id}:1"),
+                    InlineKeyboardButton(text="5", callback_data=f"balance:qty:{sku_id}:5"),
+                    InlineKeyboardButton(text="10", callback_data=f"balance:qty:{sku_id}:10"),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Custom", callback_data=f"balance:custom:{sku_id}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="« Back", callback_data=f"shop:product:{sku.product_id}"
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("balance:custom:"))
+async def balance_custom_quantity(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    sku_id = callback.data.rsplit(":", 1)[1]
+    await state.set_state(CustomQuantity.quantity)
+    await state.update_data(balance_sku_id=sku_id)
+    await callback.message.answer("Enter quantity from 1 to 100:")
+
+
+@router.message(CustomQuantity.quantity)
+async def save_custom_quantity(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    try:
+        quantity = int((message.text or "").strip())
+        sku_id = uuid.UUID(data["balance_sku_id"])
+        if quantity < 1 or quantity > 100:
+            raise ValueError
+    except (ValueError, KeyError):
+        await message.answer("Quantity must be a whole number from 1 to 100.")
+        return
+    await state.clear()
+    await send_balance_confirmation(message, message.from_user.id, sku_id, quantity)
+
+
+@router.callback_query(F.data.startswith("balance:qty:"))
+async def balance_quantity(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        _, _, raw_sku, raw_quantity = callback.data.split(":", 3)
+        sku_id = uuid.UUID(raw_sku)
+        quantity = int(raw_quantity)
+    except (ValueError, IndexError):
+        return
+    await send_balance_confirmation(callback.message, callback.from_user.id, sku_id, quantity)
+
+
+async def send_balance_confirmation(
+    target: Message, telegram_user_id: int, sku_id: uuid.UUID, quantity: int
+) -> None:
+    from sqlalchemy import select
+
+    from app.db.models import SKU, Product, ProductPrice
+
+    async with SessionFactory() as session:
+        row = (
+            await session.execute(
+                select(SKU, Product, ProductPrice)
+                .join(Product, Product.id == SKU.product_id)
+                .join(
+                    ProductPrice,
+                    (ProductPrice.sku_id == SKU.id)
+                    & (ProductPrice.provider == "balance")
+                    & ProductPrice.is_active.is_(True),
+                )
+                .where(SKU.id == sku_id)
+            )
+        ).one_or_none()
+        account = await get_account(session, telegram_user_id)
+    if row is None or account is None:
+        await target.answer("Product is unavailable.")
+        return
+    sku, product, price = row
+    total = price.amount_minor * quantity
+    token = secrets.token_urlsafe(12)
+    can_buy = account.balance_minor >= total
+    rows = []
+    if can_buy:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🛒 Buy now",
+                    callback_data=f"balance:buy:{sku.id}:{quantity}:{token}",
+                    style="success",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="💳 Insufficient balance · Top up", callback_data="account:topup"
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="« Back", callback_data=f"balance:variant:{sku.id}")]
+    )
+    await target.answer(
+        "🧾 <b>Confirm purchase</b>\n\n"
+        f"Product: {html.escape(product.name)} · {html.escape(sku.name)}\n"
+        f"Quantity: {quantity}\n"
+        f"Unit price: ${price.amount_minor / 100:.2f}\n"
+        f"Total: ${total / 100:.2f}\n"
+        f"Balance: ${account.balance_minor / 100:.2f}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("balance:buy:"))
+async def execute_balance_purchase(callback: CallbackQuery) -> None:
+    await callback.answer("Processing…")
+    try:
+        _, _, raw_sku, raw_quantity, token = callback.data.split(":", 4)
+        sku_id = uuid.UUID(raw_sku)
+        quantity = int(raw_quantity)
+        idempotency_key = f"balance:{callback.from_user.id}:{token}"
+        async with SessionFactory() as session:
+            delivery = await purchase_with_balance(
+                session,
+                telegram_user_id=callback.from_user.id,
+                sku_id=sku_id,
+                quantity=quantity,
+                idempotency_key=idempotency_key,
+                points_per_usd=settings.points_per_usd,
+            )
+    except ValueError as exc:
+        await callback.message.answer(f"❌ {html.escape(str(exc))}")
+        return
+    delivered = "\n".join(
+        f"<code>{html.escape(value)}</code>" for value in delivery.secrets
+    )
+    await callback.message.answer(
+        "✅ <b>Purchase completed</b>\n\n"
+        f"Order: <code>{delivery.public_id}</code>\n"
+        f"Product: {html.escape(delivery.product_name)}\n"
+        f"Quantity: {delivery.quantity}\n"
+        f"Unit price: ${delivery.unit_price_minor / 100:.2f}\n"
+        f"Total: ${delivery.total_amount_minor / 100:.2f}\n\n"
+        f"Delivery:\n{delivered}\n\nPlease save this information securely."
+    )
 
 
 @router.callback_query(F.data == "account:balance")
@@ -395,7 +588,38 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
     if product is None:
         await callback.message.answer("Product is unavailable.")
         return
+    variants = []
+    async with SessionFactory() as session:
+        variants = await list_product_variants(session, product.id)
     rows = []
+    if len(variants) > 1:
+        for variant in variants:
+            available_variant = variant.stock > 0 or variant.supplier_stock
+            price_text = (
+                f"${variant.balance_price_minor / 100:.2f}"
+                if variant.balance_price_minor is not None
+                else _product_price(variant)
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{variant.sku_name} | {price_text} | "
+                        f"{'🟢' if available_variant else '🔴'} {variant.stock}",
+                        callback_data=f"balance:variant:{variant.sku_id}",
+                        style="success" if available_variant else "danger",
+                    )
+                ]
+            )
+    elif variants and variants[0].balance_price_minor is not None:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"💵 Buy with balance · ${variants[0].balance_price_minor / 100:.2f}",
+                    callback_data=f"balance:variant:{variants[0].sku_id}",
+                    style="success" if variants[0].stock > 0 else "danger",
+                )
+            ]
+        )
     if product.price_xtr and product.stock > 0:
         rows.append(
             [

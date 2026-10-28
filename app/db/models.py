@@ -203,12 +203,7 @@ class Card(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             postgresql_where=text("status = 'available'"),
         ),
         Index("ix_cards_expiry", "status", "reserved_until"),
-        Index(
-            "uq_cards_order_item",
-            "order_item_id",
-            unique=True,
-            postgresql_where=text("order_item_id IS NOT NULL"),
-        ),
+        Index("ix_cards_order_item", "order_item_id"),
     )
 
     sku_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("skus.id"), nullable=False)
