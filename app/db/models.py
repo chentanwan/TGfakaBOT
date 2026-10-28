@@ -330,3 +330,21 @@ class Setting(TimestampMixin, Base):
     value: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class BalanceTopup(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "balance_topups"
+    __table_args__ = (
+        CheckConstraint("amount_minor >= 10", name="minimum_topup_amount"),
+        UniqueConstraint("method", "proof"),
+        Index("ix_balance_topups_status_created", "status", "created_at"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    method: Mapped[str] = mapped_column(String(40), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    proof: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    rejection_reason: Mapped[str | None] = mapped_column(Text)

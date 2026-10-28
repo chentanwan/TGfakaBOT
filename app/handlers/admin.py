@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.db.session import SessionFactory
 from app.plugins.registry import get_plugin_registry
 from app.services.admin import create_product, import_cards, list_admin_products, toggle_product
+from app.services.topups import list_pending_topups, review_topup
 
 router = Router(name="admin")
 settings = get_settings()
@@ -34,6 +35,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new")],
         [InlineKeyboardButton(text="📦 商品与库存", callback_data="adm:list")],
+        [InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list")],
         [InlineKeyboardButton(text="⚠️ 支付异常", callback_data="adm:pex:list")],
         [InlineKeyboardButton(text="⏳ 退款处理中", callback_data="adm:refunds:pending")],
         [InlineKeyboardButton(text="🧾 孤立支付流水", callback_data="adm:charges:list")],
@@ -110,8 +112,7 @@ async def new_product_price(message: Message, state: FSMContext) -> None:
         )
     await state.clear()
     await message.answer(
-        f"✅ 商品已创建：<b>{html.escape(product.name)}</b>\n"
-        "下一步请在商品列表中导入卡密。",
+        f"✅ 商品已创建：<b>{html.escape(product.name)}</b>\n下一步请在商品列表中导入卡密。",
         reply_markup=admin_keyboard(),
     )
 
@@ -205,3 +206,87 @@ async def product_toggle(callback: CallbackQuery) -> None:
         await callback.answer(str(exc), show_alert=True)
         return
     await callback.answer(f"已切换为 {status.value}", show_alert=True)
+
+
+@router.callback_query(F.data == "adm:topups:list")
+async def pending_topups(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    await callback.answer()
+    async with SessionFactory() as session:
+        records = await list_pending_topups(session)
+    if not records:
+        await callback.message.answer("当前没有待审核充值。")
+        return
+    for record in records:
+        await callback.message.answer(
+            "💳 <b>待审核充值</b>\n"
+            f"用户：{html.escape(record.display_name)} (<code>{record.telegram_user_id}</code>)\n"
+            f"方式：{html.escape(record.method)}\n"
+            f"金额：${record.amount_minor / 100:.2f}\n"
+            f"凭证：<code>{html.escape(record.proof)}</code>",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ 通过",
+                            callback_data=f"adm:topup:approve:{record.id}",
+                            style="success",
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ 拒绝",
+                            callback_data=f"adm:topup:reject:{record.id}",
+                            style="danger",
+                        ),
+                    ]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("adm:topup:approve:"))
+async def approve_topup(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    try:
+        topup_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        async with SessionFactory() as session:
+            record, telegram_user_id, duplicate = await review_topup(
+                session, topup_id=topup_id, admin_telegram_id=callback.from_user.id, approve=True
+            )
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("该记录已处理" if duplicate else "充值已到账", show_alert=True)
+    if not duplicate:
+        await callback.bot.send_message(
+            telegram_user_id,
+            f"✅ Top-up approved: ${record.amount_minor / 100:.2f} has been added to your balance.",
+        )
+
+
+@router.callback_query(F.data.startswith("adm:topup:reject:"))
+async def reject_topup(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    try:
+        topup_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        async with SessionFactory() as session:
+            record, telegram_user_id, duplicate = await review_topup(
+                session,
+                topup_id=topup_id,
+                admin_telegram_id=callback.from_user.id,
+                approve=False,
+            )
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("该记录已处理" if duplicate else "已拒绝", show_alert=True)
+    if not duplicate:
+        await callback.bot.send_message(
+            telegram_user_id,
+            f"❌ Top-up rejected: ${record.amount_minor / 100:.2f}. Contact support if needed.",
+        )

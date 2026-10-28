@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     api_docs_url: str = "https://example.com/api-docs"
     referral_reward_percent: int = 0
     points_per_usd: int = 1
+    binance_pay_uid: str = ""
+    minimum_topup_minor: int = 10
+    usdt_bep20_address: str = ""
     database_url: str = "postgresql+asyncpg://tgfakabot:change-me@localhost:5432/tgfakabot"
     redis_url: str = "redis://localhost:6379/0"
     card_encryption_key: str

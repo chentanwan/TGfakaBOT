@@ -39,6 +39,7 @@ from app.services.orders import (
     submit_payment_receipt,
     validate_pre_checkout,
 )
+from app.services.topups import submit_topup
 
 router = Router(name="catalog")
 settings = get_settings()
@@ -47,6 +48,11 @@ ORDERS_PAGE_SIZE = 5
 
 class CustomQuantity(StatesGroup):
     quantity = State()
+
+
+class ManualTopup(StatesGroup):
+    amount = State()
+    proof = State()
 
 
 def _home_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -186,11 +192,7 @@ async def balance_variant(callback: CallbackQuery) -> None:
                     InlineKeyboardButton(text="5", callback_data=f"balance:qty:{sku_id}:5"),
                     InlineKeyboardButton(text="10", callback_data=f"balance:qty:{sku_id}:10"),
                 ],
-                [
-                    InlineKeyboardButton(
-                        text="Custom", callback_data=f"balance:custom:{sku_id}"
-                    )
-                ],
+                [InlineKeyboardButton(text="Custom", callback_data=f"balance:custom:{sku_id}")],
                 [
                     InlineKeyboardButton(
                         text="« Back", callback_data=f"shop:product:{sku.product_id}"
@@ -285,9 +287,7 @@ async def send_balance_confirmation(
                 )
             ]
         )
-    rows.append(
-        [InlineKeyboardButton(text="« Back", callback_data=f"balance:variant:{sku.id}")]
-    )
+    rows.append([InlineKeyboardButton(text="« Back", callback_data=f"balance:variant:{sku.id}")])
     await target.answer(
         "🧾 <b>Confirm purchase</b>\n\n"
         f"Product: {html.escape(product.name)} · {html.escape(sku.name)}\n"
@@ -319,9 +319,7 @@ async def execute_balance_purchase(callback: CallbackQuery) -> None:
     except ValueError as exc:
         await callback.message.answer(f"❌ {html.escape(str(exc))}")
         return
-    delivered = "\n".join(
-        f"<code>{html.escape(value)}</code>" for value in delivery.secrets
-    )
+    delivered = "\n".join(f"<code>{html.escape(value)}</code>" for value in delivery.secrets)
     await callback.message.answer(
         "✅ <b>Purchase completed</b>\n\n"
         f"Order: <code>{delivery.public_id}</code>\n"
@@ -478,12 +476,109 @@ async def account_methods(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "account:topup")
-async def account_topup_placeholder(callback: CallbackQuery) -> None:
+async def account_topup(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await state.clear()
     await callback.message.answer(
-        "💳 <b>Top-up methods</b>\n\nPayment integrations will be enabled in the recharge phase.",
+        "💳 <b>Top-up methods</b>\nChoose a payment method:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="shop:home")]]
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔶 Binance Pay", callback_data="topup:start:binance")],
+                [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="topup:start:cryptobot")],
+                [
+                    InlineKeyboardButton(
+                        text="₮ USDT BEP20 (BSC)", callback_data="topup:start:bep20"
+                    )
+                ],
+                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("topup:start:"))
+async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None:
+    method = callback.data.rsplit(":", 1)[1]
+    await callback.answer()
+    if method == "cryptobot":
+        await callback.message.answer(
+            "CryptoBot automatic invoices will be enabled with the payment plugin.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="« Back", callback_data="account:topup")]
+                ]
+            ),
+        )
+        return
+    instructions = (
+        f"Send USDT to Binance Pay UID: <code>{html.escape(settings.binance_pay_uid)}</code>. "
+        "Then submit the Order ID."
+        if method == "binance"
+        else f"Send USDT on BSC to: <code>{html.escape(settings.usdt_bep20_address)}</code>. "
+        "Then submit the transaction hash."
+    )
+    await state.update_data(topup_method=method)
+    await state.set_state(ManualTopup.amount)
+    await callback.message.answer(
+        f"💳 <b>{'Binance Pay' if method == 'binance' else 'USDT BEP20 (BSC)'}</b>\n"
+        f"{instructions}\n\n"
+        f"💵 Minimum: ${settings.minimum_topup_minor / 100:.2f}\n"
+        "How much did you send? Enter the USD amount:",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✖ Cancel", callback_data="topup:cancel", style="danger"
+                    )
+                ]
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "topup:cancel")
+async def cancel_topup(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer("Top-up cancelled")
+    await state.clear()
+    await send_home(callback.message, callback.from_user.id)
+
+
+@router.message(ManualTopup.amount)
+async def manual_topup_amount(message: Message, state: FSMContext) -> None:
+    try:
+        amount_minor = round(float((message.text or "").strip()) * 100)
+        if amount_minor < settings.minimum_topup_minor:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            f"Enter a valid amount of at least ${settings.minimum_topup_minor / 100:.2f}."
+        )
+        return
+    await state.update_data(topup_amount_minor=amount_minor)
+    await state.set_state(ManualTopup.proof)
+    await message.answer("Send the payment Order ID or transaction hash:")
+
+
+@router.message(ManualTopup.proof)
+async def manual_topup_proof(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    try:
+        async with SessionFactory() as session:
+            record = await submit_topup(
+                session,
+                telegram_user_id=message.from_user.id,
+                method=data["topup_method"],
+                amount_minor=int(data["topup_amount_minor"]),
+                proof=message.text or "",
+            )
+    except (ValueError, KeyError) as exc:
+        await message.answer(f"❌ {html.escape(str(exc))}")
+        return
+    await state.clear()
+    await message.answer(
+        f"✅ Submitted and waiting for administrator review.\nReference: <code>{record.id}</code>",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="« Main menu", callback_data="shop:home")]]
         ),
     )
 
@@ -543,11 +638,7 @@ async def callback_category(callback: CallbackQuery) -> None:
         return
     async with SessionFactory() as session:
         products = await list_products(session)
-    products = [
-        product
-        for product in products
-        if product.category_id == category_id
-    ]
+    products = [product for product in products if product.category_id == category_id]
     if not products:
         await callback.message.answer("No products in this category.")
         return
@@ -558,9 +649,7 @@ async def callback_category(callback: CallbackQuery) -> None:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=(
-                        f"{product.name} · {_product_price(product)} · {stock_text}"
-                    ),
+                    text=(f"{product.name} · {_product_price(product)} · {stock_text}"),
                     callback_data=f"shop:product:{product.id}",
                     style="success" if available else "danger",
                 )
@@ -854,7 +943,7 @@ async def support(message: Message) -> None:
     contact = settings.support_url or "https://t.me/cclchat_bot"
     await message.answer(
         "<b>支付与订单支持</b>\n\n"
-        f"请联系：<a href=\"{html.escape(contact, quote=True)}\">{html.escape(contact)}</a>\n"
+        f'请联系：<a href="{html.escape(contact, quote=True)}">{html.escape(contact)}</a>\n'
         "联系时请提供订单号，不要发送完整卡密。"
     )
 
@@ -885,11 +974,7 @@ async def confirm_stars_purchase(callback: CallbackQuery) -> None:
                         text="✅ Confirm and pay", callback_data=f"buy_confirm:{product.id}"
                     )
                 ],
-                [
-                    InlineKeyboardButton(
-                        text="⬅️ Back", callback_data=f"shop:product:{product.id}"
-                    )
-                ],
+                [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:product:{product.id}")],
             ]
         ),
     )
@@ -961,9 +1046,7 @@ async def successful_payment(message: Message) -> None:
                 raw_payload=payment.model_dump(mode="json"),
             )
         async with SessionFactory() as session:
-            delivered = await match_and_fulfill_payment(
-                session, charge_id=receipt.charge_id
-            )
+            delivered = await match_and_fulfill_payment(session, charge_id=receipt.charge_id)
     except ShopError as exc:
         await message.answer(f"⚠️ {html.escape(str(exc))}")
         return
@@ -980,9 +1063,7 @@ async def successful_payment(message: Message) -> None:
             await message.answer("⚠️ 支付成功，但上游供货插件不可用，请联系客服。")
         return
     if not delivered.should_deliver:
-        await message.answer(
-            "✅ 该支付此前已经处理，未重复发送卡密。可通过 /orders 查看订单。"
-        )
+        await message.answer("✅ 该支付此前已经处理，未重复发送卡密。可通过 /orders 查看订单。")
         return
     await message.answer(
         "✅ <b>支付成功，商品已交付</b>\n\n"
