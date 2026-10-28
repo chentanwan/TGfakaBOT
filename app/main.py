@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.types import BotCommand
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
@@ -32,6 +33,12 @@ async def main() -> None:
     for plugin in plugin_registry.plugins:
         if plugin.router is not None:
             dispatcher.include_router(plugin.router)
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Open the main menu"),
+            BotCommand(command="help", description="Show help"),
+        ]
+    )
     # Never drop queued updates: a pending successful_payment is a financial event.
     await bot.delete_webhook(drop_pending_updates=False)
     plugin_http_runner = await start_plugin_http_server(bot, plugin_registry)

@@ -155,6 +155,24 @@ async def callback_home(callback: CallbackQuery) -> None:
     await send_home(callback.message, callback.from_user.id)
 
 
+@router.message(Command("help"))
+async def show_help_command(message: Message) -> None:
+    async with SessionFactory() as session:
+        account = await get_account(session, message.from_user.id)
+    language = account.language_code if account else settings.bot_language
+    await message.answer(
+        "ℹ️ <b>Help</b>\n\n"
+        "Use the main menu to browse products, top up your balance and view orders.\n"
+        "Purchase flow: product → plan → quantity → confirmation → delivery.\n"
+        f"Support: {html.escape(settings.support_handle)}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")]
+            ]
+        ),
+    )
+
+
 @router.message(Command("shop"))
 async def show_shop_command(message: Message) -> None:
     await send_categories(message)
@@ -339,14 +357,28 @@ async def account_balance(callback: CallbackQuery) -> None:
         account = await get_account(session, callback.from_user.id)
     if account is None:
         return
+    language = account.language_code
     await callback.message.answer(
-        f"💰 Available balance: ${account.balance_minor / 100:.2f} | ⭐ Points: {account.points}",
+        text(
+            language,
+            "balance_page",
+            balance=f"{account.balance_minor / 100:.2f}",
+            points=account.points,
+        ),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="💳 Top up", callback_data="account:topup")],
-                [InlineKeyboardButton(text="📖 Methods", callback_data="account:methods")],
-                [InlineKeyboardButton(text="🧾 Top-up history", callback_data="account:topups")],
-                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+                [InlineKeyboardButton(text=text(language, "topup"), callback_data="account:topup")],
+                [
+                    InlineKeyboardButton(
+                        text=text(language, "methods"), callback_data="account:methods"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=text(language, "topup_history"), callback_data="account:topups"
+                    )
+                ],
+                [InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")],
             ]
         ),
     )
@@ -443,9 +475,12 @@ async def choose_language(callback: CallbackQuery) -> None:
     rows.append(
         [InlineKeyboardButton(text=LANGUAGE_NAMES["id"], callback_data="account:setlang:id")]
     )
-    rows.append([InlineKeyboardButton(text="« Back", callback_data="shop:home")])
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+    language = account.language_code if account else "en"
+    rows.append([InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")])
     await callback.message.answer(
-        "🌐 Choose your language:",
+        text(language, "choose_language"),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -457,7 +492,7 @@ async def save_language(callback: CallbackQuery) -> None:
         await set_account_language(
             session, telegram_user_id=callback.from_user.id, language_code=language
         )
-    await callback.answer("Language updated")
+    await callback.answer(text(language, "language_updated"))
     await send_home(callback.message, callback.from_user.id)
 
 
