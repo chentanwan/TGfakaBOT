@@ -20,6 +20,7 @@ from app.services.admin import (
     list_broadcast_user_ids,
     toggle_product,
 )
+from app.services.audit import record_admin_action
 from app.services.topups import list_pending_topups, review_topup
 
 router = Router(name="admin")
@@ -136,6 +137,7 @@ async def new_product_price(message: Message, state: FSMContext) -> None:
             name=data["name"],
             description=data["description"],
             price_xtr=price,
+            admin_telegram_id=message.from_user.id,
         )
     await state.clear()
     await message.answer(
@@ -209,6 +211,7 @@ async def cards_import(message: Message, state: FSMContext) -> None:
                 session,
                 product_id=product_id,
                 secrets=(message.text or "").splitlines(),
+                admin_telegram_id=message.from_user.id,
             )
     except ValueError as exc:
         await message.answer(f"❌ {html.escape(str(exc))}")
@@ -236,7 +239,9 @@ async def product_toggle(callback: CallbackQuery) -> None:
     try:
         product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
         async with SessionFactory() as session:
-            status = await toggle_product(session, product_id)
+            status = await toggle_product(
+                session, product_id, admin_telegram_id=callback.from_user.id
+            )
     except ValueError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
@@ -448,6 +453,11 @@ async def admin_broadcast_send(message: Message, state: FSMContext) -> None:
         return
     async with SessionFactory() as session:
         recipients = await list_broadcast_user_ids(session)
+        async with session.begin():
+            await record_admin_action(
+                session, admin_telegram_id=message.from_user.id, action="user_broadcast",
+                target_type="users", details={"recipient_count": len(recipients)},
+            )
     await state.clear()
     sent = failed = 0
     for telegram_id in recipients:

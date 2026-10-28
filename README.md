@@ -39,8 +39,8 @@ Telegram Bot (Aiogram long polling)
         └── cleanup task: release expired unpaid reservations
 ```
 
-The first release uses one default SKU per product while keeping an explicit SKU table for future multi-SKU support.
-第一版每个商品使用一个默认 SKU，但从第一天起保留独立 SKU 表，便于后续扩展。
+Products support one or more independent SKU plans. Each plan can have its own balance price and inventory, while Stars and payment plugins remain independently configurable.
+商品支持一个或多个独立 SKU 规格；每个规格可拥有独立余额价格和库存，Stars 与支付插件价格仍可独立配置。
 
 ## Quick Start / 快速开始
 
@@ -136,11 +136,11 @@ alembic revision --autogenerate -m "describe change"
 - Logs must never include plaintext card secrets or secret keys.
 - Paid cards are never automatically returned to inventory.
 
-## Current MVP limitations / 当前限制
+## Operational limitations / 运行限制
 
-- One card and one default SKU per order.
-- Long polling only.
-- Chinese-first UI; full i18n is planned.
+- Long polling is the default Telegram update mode.
+- User-facing main/account menus support seven languages; some provider-specific and deep workflow messages remain English or Chinese.
+- CryptoBot production verification requires an operator-provided Crypto Pay token and public HTTPS callback.
 - Payment exceptions can be fulfilled with a reserved/new card or refunded from the admin panel.
 - Dangerous admin actions use Redis-backed, single-use confirmation tokens.
 - `/orders` is paginated; `/terms`, `/support`, and `/paysupport` support Stars users.

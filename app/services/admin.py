@@ -30,7 +30,8 @@ class RestockResult:
 
 
 async def create_product(
-    session: AsyncSession, *, name: str, description: str, price_xtr: int
+    session: AsyncSession, *, name: str, description: str, price_xtr: int,
+    admin_telegram_id: int | None = None,
 ) -> Product:
     if price_xtr < 1:
         raise ValueError("Stars 价格必须为正整数")
@@ -52,6 +53,12 @@ async def create_product(
                 is_active=True,
             )
         )
+        if admin_telegram_id is not None:
+            await record_admin_action(
+                session, admin_telegram_id=admin_telegram_id, action="product_create",
+                target_type="product", target_id=str(product.id),
+                details={"name": product.name, "price_xtr": price_xtr},
+            )
     return product
 
 
@@ -80,7 +87,8 @@ async def list_admin_products(session: AsyncSession) -> list[AdminProduct]:
 
 
 async def import_cards(
-    session: AsyncSession, *, product_id: uuid.UUID, secrets: list[str]
+    session: AsyncSession, *, product_id: uuid.UUID, secrets: list[str],
+    admin_telegram_id: int | None = None,
 ) -> RestockResult:
     normalized = list(dict.fromkeys(secret.strip() for secret in secrets if secret.strip()))
     if not normalized:
@@ -115,6 +123,12 @@ async def import_cards(
                 Card.sku_id == sku.id, Card.status == CardStatus.AVAILABLE
             )
         )
+        if admin_telegram_id is not None:
+            await record_admin_action(
+                session, admin_telegram_id=admin_telegram_id, action="inventory_import",
+                target_type="product", target_id=str(product_id),
+                details={"inserted": inserted, "duplicates": len(normalized) - inserted},
+            )
     return RestockResult(
         inserted=inserted, duplicates=len(normalized) - inserted,
         current_stock=int(current_stock or 0), unit_price_xtr=sku.price_xtr,
@@ -122,7 +136,9 @@ async def import_cards(
     )
 
 
-async def toggle_product(session: AsyncSession, product_id: uuid.UUID) -> ProductStatus:
+async def toggle_product(
+    session: AsyncSession, product_id: uuid.UUID, admin_telegram_id: int | None = None
+) -> ProductStatus:
     async with session.begin():
         product = await session.scalar(
             select(Product).where(Product.id == product_id).with_for_update()
@@ -132,6 +148,12 @@ async def toggle_product(session: AsyncSession, product_id: uuid.UUID) -> Produc
         product.status = (
             ProductStatus.DRAFT if product.status == ProductStatus.ACTIVE else ProductStatus.ACTIVE
         )
+        if admin_telegram_id is not None:
+            await record_admin_action(
+                session, admin_telegram_id=admin_telegram_id, action="product_toggle",
+                target_type="product", target_id=str(product_id),
+                details={"status": product.status.value},
+            )
         return product.status
 
 
