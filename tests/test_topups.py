@@ -23,3 +23,17 @@ def test_manual_topup_has_cancel_and_all_method_buttons() -> None:
         assert text in methods
     assert "topup:cancel" in source
     assert "CryptoBot" not in source
+
+
+def test_usdt_destination_formats_are_validated() -> None:
+    source = Path("app/services/usdt_methods.py").read_text()
+    assert 'r"0x[0-9a-fA-F]{40}\\Z"' in source
+    assert 'r"T[1-9A-HJ-NP-Za-km-z]{33}\\Z"' in source
+    assert 'r"[0-9]{4,20}\\Z"' in source
+    assert "is_valid_destination(self.id, self.destination)" in source
+
+
+def test_concurrent_usdt_proof_duplicates_have_safe_error() -> None:
+    source = Path("app/services/plugin_payments.py").read_text()
+    assert "except IntegrityError as exc" in source
+    assert 'PluginPaymentError("该付款凭证已提交")' in source

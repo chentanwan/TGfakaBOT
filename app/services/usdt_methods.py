@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from app.core.config import Settings
 
 USDT_PRICE_PROVIDER = "usdt"
+_EVM_ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
+_TRON_ADDRESS = re.compile(r"T[1-9A-HJ-NP-Za-km-z]{33}\Z")
+_BINANCE_UID = re.compile(r"[0-9]{4,20}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,7 +21,18 @@ class UsdtMethod:
 
     @property
     def available(self) -> bool:
-        return self.enabled and bool(self.destination.strip())
+        return self.enabled and is_valid_destination(self.id, self.destination)
+
+
+def is_valid_destination(method_id: str, destination: str) -> bool:
+    value = destination.strip()
+    if method_id == "usdt_binance":
+        return bool(_BINANCE_UID.fullmatch(value))
+    if method_id in {"usdt_bep20", "usdt_arbitrum"}:
+        return bool(_EVM_ADDRESS.fullmatch(value))
+    if method_id == "usdt_trc20":
+        return bool(_TRON_ADDRESS.fullmatch(value))
+    return False
 
 
 def configured_usdt_methods(settings: Settings) -> tuple[UsdtMethod, ...]:
