@@ -22,6 +22,7 @@ from app.db.models import (
     SupplierProduct,
     User,
 )
+from app.services.supplier_routing import reserve_supplier_route
 
 settings = get_settings()
 
@@ -529,14 +530,14 @@ async def match_and_fulfill_payment(
                     charge.order_id = order.id
                     charge.resolution_status = "linked"
                     order.paid_at = now
-                    supplier = await session.scalar(
-                        select(SupplierProduct).where(
-                            SupplierProduct.sku_id == item.sku_id,
-                            SupplierProduct.in_stock.is_(True),
-                SupplierProduct.suspended_for_profit.is_(False),
+                    supplier_route = (
+                        await reserve_supplier_route(
+                            session, order=order, sku_id=item.sku_id
                         )
-                    ) if item else None
-                    if card is None and supplier is not None:
+                        if item and card is None
+                        else None
+                    )
+                    if card is None and supplier_route is not None:
                         order.status = OrderStatus.PAID
                         result = DeliveredOrder(
                             public_id=order.public_id,

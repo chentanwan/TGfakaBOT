@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import card_vault
 from app.db.base import CardStatus, OrderStatus
-from app.db.models import Card, Order, OrderItem, PluginPayment, SupplierProduct, User
+from app.db.models import Card, Order, OrderItem, PluginPayment, User
+from app.services.supplier_routing import reserve_supplier_route
 
 
 class PluginPaymentError(Exception):
@@ -167,14 +168,12 @@ async def fulfill_plugin_payment(
             if item
             else None
         )
-        supplier = await session.scalar(
-            select(SupplierProduct).where(
-                SupplierProduct.sku_id == item.sku_id,
-                SupplierProduct.in_stock.is_(True),
-                SupplierProduct.suspended_for_profit.is_(False),
-            )
-        ) if item else None
-        if card is None and supplier is not None:
+        supplier_route = (
+            await reserve_supplier_route(session, order=order, sku_id=item.sku_id)
+            if item and card is None
+            else None
+        )
+        if card is None and supplier_route is not None:
             order.status = OrderStatus.PAID
             return PluginDelivery(
                 user.telegram_user_id,

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import CardStatus, OrderStatus
-from app.db.models import Card, Order, OrderItem, SupplierProduct, User
+from app.db.models import Card, Order, OrderItem, SupplierOrder, SupplierProduct, User
 
 
 class SupplierFulfillmentError(Exception):
@@ -44,12 +44,16 @@ async def get_supplier_purchase_context(
             select(Order, OrderItem, User, SupplierProduct)
             .join(OrderItem, OrderItem.order_id == Order.id)
             .join(User, User.id == Order.user_id)
+            .join(SupplierOrder, SupplierOrder.order_id == Order.id)
             .join(
                 SupplierProduct,
                 (SupplierProduct.sku_id == OrderItem.sku_id)
                 & (SupplierProduct.provider == provider),
             )
-            .where(Order.id == order_id)
+            .where(
+                Order.id == order_id,
+                SupplierOrder.provider == provider,
+            )
         )
     ).one_or_none()
     if row is None:

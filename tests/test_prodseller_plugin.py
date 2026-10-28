@@ -274,3 +274,21 @@ def test_suspended_supplier_mapping_is_not_sellable_or_fulfillable() -> None:
     assert "not item.suspended_for_profit" in orders
     assert orders.count("SupplierProduct.suspended_for_profit.is_(False)") >= 2
     assert "SupplierProduct.suspended_for_profit.is_(False)" in payments
+
+
+def test_supplier_route_is_snapshotted_and_cost_ordered() -> None:
+    source = Path("app/services/supplier_routing.py").read_text()
+    assert "cost_amount_minor.asc()" in source
+    assert "suspended_for_profit.is_(False)" in source
+    assert "requires_customer_email.is_(False)" in source
+    assert '"route_snapshot"' in source
+    assert "SupplierOrder(" in source
+
+
+def test_paid_fulfillment_reserves_supplier_route() -> None:
+    orders = Path("app/services/orders.py").read_text()
+    payments = Path("app/services/plugin_payments.py").read_text()
+    assert "reserve_supplier_route" in orders
+    assert "reserve_supplier_route" in payments
+    fulfillment = Path("app/services/supplier_fulfillment.py").read_text()
+    assert "SupplierOrder.provider == provider" in fulfillment
