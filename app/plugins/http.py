@@ -3,6 +3,7 @@ import logging
 from aiogram import Bot
 from aiohttp import web
 
+from app.api import register_api_routes
 from app.core.config import get_settings
 from app.plugins.registry import PluginRegistry
 
@@ -15,6 +16,7 @@ async def start_plugin_http_server(bot: Bot, registry: PluginRegistry) -> web.Ap
     settings = get_settings()
     app = web.Application(client_max_size=128 * 1024)
     app.router.add_get("/plugins/health", lambda _: web.Response(text="ok"))
+    register_api_routes(app)
     for plugin in registry.plugins:
         plugin.register_http_routes(app, bot)
     runner = web.AppRunner(app, access_log=logger)
