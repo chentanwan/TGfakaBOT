@@ -22,6 +22,7 @@ from app.db.models import (
     SupplierProduct,
     User,
 )
+from app.plugins.registry import get_plugin_registry
 from app.services.supplier_routing import reserve_supplier_route
 
 settings = get_settings()
@@ -532,7 +533,10 @@ async def match_and_fulfill_payment(
                     order.paid_at = now
                     supplier_route = (
                         await reserve_supplier_route(
-                            session, order=order, sku_id=item.sku_id
+                            session,
+                            order=order,
+                            sku_id=item.sku_id,
+                            available_providers=get_plugin_registry().supplier_providers,
                         )
                         if item and card is None
                         else None

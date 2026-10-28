@@ -308,3 +308,14 @@ def test_admin_can_set_audited_supplier_routing_priority() -> None:
     assert 'action="supplier_routing_priority"' in source
     assert '"old_priority": old_priority' in source
     assert '"new_priority": priority' in source
+
+
+def test_routes_only_to_loaded_supplier_plugins() -> None:
+    registry = Path("app/plugins/registry.py").read_text()
+    assert "def supplier_providers" in registry
+    assert 'getattr(plugin, "supplier_provider", False)' in registry
+    plugin = Path("plugins/prodseller/plugin.py").read_text()
+    assert "supplier_provider = True" in plugin
+    routing = Path("app/services/supplier_routing.py").read_text()
+    assert "available_providers" in routing
+    assert "SupplierProduct.provider.in_(available_providers)" in routing

@@ -22,6 +22,14 @@ class PluginRegistry:
     def plugins(self) -> tuple[Plugin, ...]:
         return tuple(self._plugins)
 
+    @property
+    def supplier_providers(self) -> frozenset[str]:
+        return frozenset(
+            plugin.name
+            for plugin in self._plugins
+            if getattr(plugin, "supplier_provider", False)
+        )
+
 
 _registry: PluginRegistry | None = None
 

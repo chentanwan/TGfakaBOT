@@ -54,6 +54,7 @@ class RoutingPriority(StatesGroup):
 
 class ProdsellerPlugin:
     name = PROVIDER
+    supplier_provider = True
 
     def __init__(self) -> None:
         self.settings = get_prodseller_settings()

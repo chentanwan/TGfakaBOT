@@ -22,6 +22,7 @@ async def reserve_supplier_route(
     *,
     order: Order,
     sku_id: uuid.UUID,
+    available_providers: frozenset[str] | None = None,
 ) -> SupplierRoute | None:
     """Select and snapshot the cheapest eligible supplier for a paid order."""
     reserved = await session.scalar(
@@ -43,16 +44,19 @@ async def reserve_supplier_route(
             mapping.cost_currency,
         )
 
-    mapping = await session.scalar(
-        select(SupplierProduct)
-        .where(
+    statement = select(SupplierProduct).where(
             SupplierProduct.sku_id == sku_id,
             SupplierProduct.in_stock.is_(True),
             SupplierProduct.suspended_for_profit.is_(False),
             SupplierProduct.requires_customer_email.is_(False),
             SupplierProduct.cost_currency == order.currency,
         )
-        .order_by(
+    if available_providers is not None:
+        if not available_providers:
+            return None
+        statement = statement.where(SupplierProduct.provider.in_(available_providers))
+    mapping = await session.scalar(
+        statement.order_by(
             SupplierProduct.routing_priority.asc(),
             SupplierProduct.cost_amount_minor.asc(),
             SupplierProduct.provider.asc(),

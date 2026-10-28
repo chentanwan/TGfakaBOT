@@ -26,6 +26,7 @@ class PluginProduct:
 class Plugin(Protocol):
     name: str
     router: Router | None
+    supplier_provider: bool
 
     def catalog_button(self, product: PluginProduct) -> InlineKeyboardButton | None: ...
 
