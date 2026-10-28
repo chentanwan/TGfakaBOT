@@ -31,11 +31,11 @@ async def main() -> None:
                 "blockNumber": hex(100),
                 "logs": [
                     {
-                        "address": token,
+                        "address": state["evm_token"],
                         "topics": [
                             "0x" + TRANSFER,
                             "0x" + "0" * 64,
-                            "0x" + destination[2:].rjust(64, "0"),
+                            "0x" + state["evm_destination"][2:].rjust(64, "0"),
                         ],
                         "data": hex(state["evm_amount"]),
                     }
