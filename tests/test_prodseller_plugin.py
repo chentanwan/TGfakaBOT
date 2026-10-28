@@ -194,3 +194,25 @@ def test_upstream_reconciliation_rejects_invalid_or_naive_times() -> None:
     assert ProdsellerPlugin._parse_upstream_datetime("2026-01-01T00:00:00") is None
     parsed = ProdsellerPlugin._parse_upstream_datetime("2026-01-01T00:00:00Z")
     assert parsed is not None and parsed.tzinfo is not None
+
+
+def test_background_tasks_reserve_api_quota_for_fulfillment() -> None:
+    plugin = object.__new__(ProdsellerPlugin)
+    plugin.settings = ProdsellerSettings(
+        prodseller_api_key="test", prodseller_rate_limit_reserve=20
+    )
+    class Client:
+        pass
+    from plugins.prodseller.client import RateLimit
+    plugin.client = Client()
+    plugin.client.rate_limit = RateLimit(limit=300, remaining=20)
+    assert plugin._rate_limit_exhausted() is True
+    plugin.client.rate_limit = RateLimit(limit=300, remaining=21)
+    assert plugin._rate_limit_exhausted() is False
+
+
+def test_rate_limit_reserve_has_safe_default() -> None:
+    settings = ProdsellerSettings(prodseller_api_key="test")
+    assert settings.prodseller_rate_limit_reserve == 20
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "if not missing or self._rate_limit_exhausted()" in source

@@ -209,16 +209,22 @@ class ProdsellerPlugin:
 
     async def _sync_products_loop(self) -> None:
         while True:
+            delay = max(1, self.settings.prodseller_product_sync_minutes) * 60
             try:
-                products = await self.client.list_products()
-                updated, suspended = await self._sync_existing(products)
-                logger.info("ProdSeller automatic product sync updated %s mappings", updated)
-                await self._notify_profit_suspensions(suspended)
+                if self._rate_limit_exhausted():
+                    delay = self._rate_limit_delay(delay)
+                else:
+                    products = await self.client.list_products()
+                    updated, suspended = await self._sync_existing(products)
+                    logger.info("ProdSeller automatic product sync updated %s mappings", updated)
+                    await self._notify_profit_suspensions(suspended)
+            except ProdsellerError as exc:
+                logger.exception("ProdSeller automatic product sync failed")
+                if exc.status == 429:
+                    delay = self._rate_limit_delay(delay)
             except Exception:
                 logger.exception("ProdSeller automatic product sync failed")
-            await asyncio.sleep(
-                max(1, self.settings.prodseller_product_sync_minutes) * 60
-            )
+            await asyncio.sleep(delay)
 
     async def _poll_pending_orders(self) -> None:
         while True:
@@ -305,7 +311,7 @@ class ProdsellerPlugin:
                     ).limit(20)
                 )
             ).all()
-        if not missing:
+        if not missing or self._rate_limit_exhausted():
             return
         history = await self.client.list_orders(page=1, limit=200)
         upstream_orders = history["orders"]
@@ -974,6 +980,23 @@ class ProdsellerPlugin:
                 response_data=safe_response,
                 last_error=error,
             )
+
+    def _rate_limit_exhausted(self) -> bool:
+        remaining = self.client.rate_limit.remaining
+        return (
+            remaining is not None
+            and remaining <= self.settings.prodseller_rate_limit_reserve
+        )
+
+    def _rate_limit_delay(self, default: int) -> int:
+        retry_after = self.client.rate_limit.retry_after
+        if retry_after:
+            return max(default, retry_after)
+        reset_at = self.client.rate_limit.reset_at
+        if reset_at:
+            reset_delay = reset_at - int(datetime.now(UTC).timestamp()) + 1
+            return max(default, reset_delay)
+        return default
 
     @staticmethod
     def _failure_status(exc: Exception) -> str:

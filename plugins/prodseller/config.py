@@ -15,6 +15,7 @@ class ProdsellerSettings(BaseSettings):
     prodseller_profit_fixed: Decimal = Decimal("0.00")
     prodseller_product_sync_minutes: int = 60
     prodseller_order_poll_seconds: int = 30
+    prodseller_rate_limit_reserve: int = 20
 
     @field_validator("prodseller_profit_percent", "prodseller_profit_fixed")
     @classmethod
@@ -23,7 +24,11 @@ class ProdsellerSettings(BaseSettings):
             raise ValueError("profit settings must be finite and nonnegative")
         return value
 
-    @field_validator("prodseller_product_sync_minutes", "prodseller_order_poll_seconds")
+    @field_validator(
+        "prodseller_product_sync_minutes",
+        "prodseller_order_poll_seconds",
+        "prodseller_rate_limit_reserve",
+    )
     @classmethod
     def validate_positive_interval(cls, value: int) -> int:
         if value < 1:
