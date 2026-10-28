@@ -226,3 +226,11 @@ def test_admin_can_review_and_select_ambiguous_supplier_candidates() -> None:
     assert "仅在人工核对确认后选择" in source
     assert "record_supplier_recovery" in source
     assert "该上游订单不再符合安全匹配条件" in source
+
+
+def test_normalized_supplier_metadata_is_json_serializable() -> None:
+    import json
+    remote = {"id": "p1", "price": Decimal("0.02"), "nested": {"ok": True}}
+    safe = ProdsellerPlugin._json_safe_remote(remote)
+    assert safe["price"] == "0.02"
+    json.dumps(safe)

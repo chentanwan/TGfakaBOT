@@ -934,6 +934,13 @@ class ProdsellerPlugin:
             "请在商品列表设置 BEpusdt 美元售价后再上架销售。"
         )
 
+    @staticmethod
+    def _json_safe_remote(remote: dict) -> dict:
+        return {
+            key: str(value) if isinstance(value, Decimal) else value
+            for key, value in remote.items()
+        }
+
     async def _import_product(self, remote: dict) -> uuid.UUID:
         cost_minor = self._minor(remote["price"])
         sale_minor = self._sale_price(cost_minor)
@@ -974,7 +981,7 @@ class ProdsellerPlugin:
                     cost_amount_minor=cost_minor,
                     in_stock=remote["inStock"],
                     requires_customer_email=remote["requiresEmailActivation"],
-                    metadata_json=remote,
+                    metadata_json=self._json_safe_remote(remote),
                 )
             )
             session.add(
@@ -1010,7 +1017,7 @@ class ProdsellerPlugin:
                 mapping.cost_amount_minor = new_cost
                 mapping.in_stock = remote["inStock"]
                 mapping.requires_customer_email = remote["requiresEmailActivation"]
-                mapping.metadata_json = remote
+                mapping.metadata_json = self._json_safe_remote(remote)
                 mapping.last_synced_at = datetime.now(UTC)
                 price = await session.scalar(
                     select(ProductPrice).where(
