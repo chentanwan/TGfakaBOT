@@ -58,6 +58,9 @@ class ProdsellerPlugin:
         self.router.callback_query.register(self._balance, F.data == "plugin:prodseller:balance")
         self.router.callback_query.register(self._sync, F.data == "plugin:prodseller:sync")
         self.router.callback_query.register(
+            self._health, F.data == "plugin:prodseller:health"
+        )
+        self.router.callback_query.register(
             self._browse, F.data.startswith("plugin:prodseller:browse:")
         )
         self.router.callback_query.register(
@@ -115,6 +118,11 @@ class ProdsellerPlugin:
                 InlineKeyboardButton(
                     text="💰 ProdSeller 余额", callback_data="plugin:prodseller:balance"
                 ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🩺 ProdSeller 健康", callback_data="plugin:prodseller:health"
+                )
             ],
         ]
 
@@ -889,6 +897,47 @@ class ProdsellerPlugin:
             return
         await callback.message.answer(f"ProdSeller 余额：${balance:.2f} USD")
 
+    async def _health(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        await callback.answer("检查中…")
+        try:
+            balance = await self.client.balance()
+            products = await self.client.list_products()
+            async with SessionFactory() as session:
+                mappings = (
+                    await session.scalars(
+                        select(SupplierProduct).where(SupplierProduct.provider == PROVIDER)
+                    )
+                ).all()
+            last_sync = max(
+                (mapping.last_synced_at for mapping in mappings if mapping.last_synced_at),
+                default=None,
+            )
+            rate = self.client.rate_limit
+            quota = (
+                f"{rate.remaining}/{rate.limit}"
+                if rate.remaining is not None and rate.limit is not None
+                else "上游未返回"
+            )
+            await callback.message.answer(
+                "🩺 <b>ProdSeller 健康状态</b>\n\n"
+                "API 鉴权：✅ 正常\n"
+                f"余额：${balance:.2f} USD\n"
+                f"上游商品：{len(products)}\n"
+                f"本地映射：{len(mappings)}\n"
+                f"最近同步：{last_sync or '尚未同步'}\n"
+                f"请求额度：{quota}\n"
+                f"后台保留：{self.settings.prodseller_rate_limit_reserve}"
+            )
+        except ProdsellerError as exc:
+            await callback.message.answer(
+                "🩺 <b>ProdSeller 健康状态</b>\n\n"
+                f"API：❌ {html.escape(str(exc))}\n"
+                f"HTTP：{exc.status or '网络/未知'}"
+            )
+
     async def _sync(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
@@ -898,6 +947,19 @@ class ProdsellerPlugin:
             products = await self.client.list_products()
             updated, suspended = await self._sync_existing(products)
             await self._notify_profit_suspensions(suspended)
+            async with SessionFactory() as session, session.begin():
+                await record_admin_action(
+                    session,
+                    admin_telegram_id=callback.from_user.id,
+                    action="supplier_manual_sync",
+                    target_type="supplier",
+                    target_id=PROVIDER,
+                    details={
+                        "upstream_products": len(products),
+                        "updated_mappings": updated,
+                        "profit_suspended": len(suspended),
+                    },
+                )
         except ProdsellerError as exc:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return

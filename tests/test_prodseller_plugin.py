@@ -243,3 +243,14 @@ def test_supplier_product_import_is_admin_audited() -> None:
     assert '"cost_amount_minor": cost_minor' in source
     assert "admin_telegram_id=callback.from_user.id" in source
     assert "admin_telegram_id=message.from_user.id" in source
+
+
+def test_supplier_health_panel_and_sync_audit_exist() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "plugin:prodseller:health" in source
+    assert "ProdSeller 健康状态" in source
+    assert "本地映射" in source
+    assert "请求额度" in source
+    assert 'action="supplier_manual_sync"' in source
+    assert '"updated_mappings": updated' in source
+    assert '"profit_suspended": len(suspended)' in source
