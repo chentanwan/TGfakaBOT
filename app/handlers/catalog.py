@@ -502,10 +502,16 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
     if method == "cryptobot":
         await callback.message.answer(
-            "CryptoBot automatic invoices will be enabled with the payment plugin.",
+            "Open CryptoBot automatic invoice flow:",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="« Back", callback_data="account:topup")]
+                    [
+                        InlineKeyboardButton(
+                            text="🤖 Create CryptoBot invoice",
+                            callback_data="plugin:cryptobot:topup",
+                        )
+                    ],
+                    [InlineKeyboardButton(text="« Back", callback_data="account:topup")],
                 ]
             ),
         )
