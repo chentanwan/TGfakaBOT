@@ -77,6 +77,14 @@ class ProdsellerPlugin:
         self.router.callback_query.register(
             self._recover_query, F.data.startswith("plugin:prodseller:recover:")
         )
+        self.router.callback_query.register(
+            self._recovery_candidates,
+            F.data.startswith("plugin:prodseller:candidates:"),
+        )
+        self.router.callback_query.register(
+            self._select_recovery_candidate,
+            F.data.startswith("plugin:prodseller:selectcandidate:"),
+        )
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
         self.router.message.register(self._save_custom_price, CustomPrice.amount)
         self._bot: Bot | None = None
@@ -525,6 +533,10 @@ class ProdsellerPlugin:
                         text="🔎 查询恢复",
                         callback_data=f"plugin:prodseller:recover:{item.id}",
                     ),
+                    InlineKeyboardButton(
+                        text="🧩 候选订单",
+                        callback_data=f"plugin:prodseller:candidates:{item.id}",
+                    ),
                 ]
             )
         navigation = []
@@ -587,6 +599,110 @@ class ProdsellerPlugin:
             f"恢复时间：{supplier_order.recovered_at or '无'}\n"
             f"恢复说明：{html.escape(supplier_order.recovery_note or '无')}\n"
             f"响应字段：{html.escape(response_keys)}"
+        )
+
+    async def _recovery_candidates(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            supplier_order_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        async with SessionFactory() as session:
+            supplier_order = await session.get(SupplierOrder, supplier_order_id)
+            context = (
+                await get_supplier_purchase_context(
+                    session, order_id=supplier_order.order_id, provider=PROVIDER
+                )
+                if supplier_order
+                else None
+            )
+        if supplier_order is None or context is None:
+            await callback.answer("本地供货订单不存在", show_alert=True)
+            return
+        if supplier_order.external_order_id:
+            await callback.answer("该订单已有上游订单号", show_alert=True)
+            return
+        history = await self.client.list_orders(page=1, limit=200)
+        candidates = self._reconciliation_candidates(
+            context=context,
+            supplier_created_at=supplier_order.created_at,
+            orders=history["orders"],
+        )
+        if not candidates:
+            await callback.answer("没有符合商品、数量、金额和时间的候选", show_alert=True)
+            return
+        from aiogram.types import InlineKeyboardMarkup
+
+        lines = ["🧩 <b>上游订单候选</b>", f"本地订单：<code>{context.public_id}</code>"]
+        rows = []
+        for order in candidates[:10]:
+            created = html.escape(str(order.get("createdAt") or "未知"))
+            lines.append(
+                f"\n<code>{html.escape(order['orderId'])}</code> · {order['status']}\n"
+                f"数量 {order['quantity']} · ${order['amount']:.2f} · {created}"
+            )
+            rows.append(
+                [InlineKeyboardButton(
+                    text=f"选择 {order['orderId'][:12]}",
+                    callback_data=(
+                        f"plugin:prodseller:selectcandidate:{supplier_order_id}:"
+                        f"{order['orderId']}"
+                    ),
+                    style="danger",
+                )]
+            )
+        await callback.answer()
+        await callback.message.answer(
+            "\n".join(lines) + "\n\n⚠️ 仅在人工核对确认后选择。",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _select_recovery_candidate(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            prefix = "plugin:prodseller:selectcandidate:"
+            supplier_raw, external_order_id = callback.data[len(prefix):].split(":", 1)
+            supplier_order_id = uuid.UUID(supplier_raw)
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        response = await self.client.get_order(external_order_id)
+        async with SessionFactory() as session:
+            supplier_order = await record_supplier_recovery(
+                session,
+                supplier_order_id=supplier_order_id,
+                admin_telegram_id=callback.from_user.id,
+                note=f"管理员从候选订单中确认上游订单 {external_order_id}",
+            )
+            context = await get_supplier_purchase_context(
+                session, order_id=supplier_order.order_id, provider=PROVIDER
+            )
+        if context is None:
+            await callback.answer("找不到本地采购上下文", show_alert=True)
+            return
+        candidates = self._reconciliation_candidates(
+            context=context,
+            supplier_created_at=supplier_order.created_at,
+            orders=[response],
+        )
+        if len(candidates) != 1:
+            await callback.answer("该上游订单不再符合安全匹配条件", show_alert=True)
+            return
+        await self._save_result(
+            context.order_id, response["orderId"], response["status"],
+            self._minor(response["amount"]), response,
+        )
+        if response["status"] == "delivered":
+            await self._deliver_recovered_order(context.order_id, response)
+        await callback.answer("候选已绑定", show_alert=True)
+        await callback.message.answer(
+            f"✅ 已绑定上游订单 <code>{html.escape(response['orderId'])}</code>，"
+            f"状态：{html.escape(response['status'])}"
         )
 
     async def _recover_query(self, callback: CallbackQuery, state: FSMContext) -> None:

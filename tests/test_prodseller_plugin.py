@@ -216,3 +216,13 @@ def test_rate_limit_reserve_has_safe_default() -> None:
     assert settings.prodseller_rate_limit_reserve == 20
     source = Path("plugins/prodseller/plugin.py").read_text()
     assert "if not missing or self._rate_limit_exhausted()" in source
+
+
+def test_admin_can_review_and_select_ambiguous_supplier_candidates() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "plugin:prodseller:candidates:" in source
+    assert "plugin:prodseller:selectcandidate:" in source
+    assert "_reconciliation_candidates" in source
+    assert "仅在人工核对确认后选择" in source
+    assert "record_supplier_recovery" in source
+    assert "该上游订单不再符合安全匹配条件" in source
