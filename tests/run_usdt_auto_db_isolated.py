@@ -182,8 +182,9 @@ async def main() -> None:
             await session.flush()
             topup_id = topup.id
         auto.verify_usdt_payment = confirmed
-        first = await auto.verify_topup(topup_id)
-        second = await auto.verify_topup(topup_id)
+        first, second = await asyncio.gather(
+            auto.verify_topup(topup_id), auto.verify_topup(topup_id)
+        )
         async with SessionFactory() as session:
             stored_user = await session.get(User, user.id)
             stored_topup = await session.get(BalanceTopup, topup_id)
@@ -192,8 +193,9 @@ async def main() -> None:
         assert first.state == "approved" and second.state == "approved"
 
         payment_id, order_id, card_id = await make_order(user, 2)
-        first_order = await auto.verify_order(payment_id)
-        second_order = await auto.verify_order(payment_id)
+        first_order, second_order = await asyncio.gather(
+            auto.verify_order(payment_id), auto.verify_order(payment_id)
+        )
         async with SessionFactory() as session:
             order = await session.get(Order, order_id)
             card = await session.get(Card, card_id)
@@ -201,8 +203,10 @@ async def main() -> None:
             assert order.status == OrderStatus.FULFILLED
             assert card.status == CardStatus.DELIVERED
             assert payment.status == "paid"
-        assert first_order.delivery and first_order.delivery.should_deliver
-        assert second_order.state == "paid" and second_order.delivery is None
+        delivered = [outcome for outcome in (first_order, second_order) if outcome.delivery]
+        duplicates = [outcome for outcome in (first_order, second_order) if not outcome.delivery]
+        assert len(delivered) == 1 and delivered[0].delivery.should_deliver
+        assert len(duplicates) == 1 and duplicates[0].state == "paid"
 
         rejected_payment, rejected_order, rejected_card = await make_order(user, 3)
         auto.verify_usdt_payment = rejected
