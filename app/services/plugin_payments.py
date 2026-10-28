@@ -242,3 +242,48 @@ async def update_plugin_payment_status(
         payment.last_event = event
         if payment.status != "paid":
             payment.status = status
+
+
+async def submit_manual_usdt_proof(
+    session: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    provider: str,
+    proof: str,
+) -> None:
+    if not provider.startswith("usdt_"):
+        raise PluginPaymentError("不支持的 USDT 支付方式")
+    proof = proof.strip()
+    if provider in {"usdt_bep20", "usdt_arbitrum"}:
+        proof = proof.lower()
+    if len(proof) < 4 or len(proof) > 255:
+        raise PluginPaymentError("付款凭证格式无效")
+    async with session.begin():
+        row = (
+            await session.execute(
+                select(PluginPayment, Order)
+                .join(Order, Order.id == PluginPayment.order_id)
+                .where(
+                    PluginPayment.order_id == order_id,
+                    PluginPayment.provider == provider,
+                )
+                .with_for_update(of=(PluginPayment, Order))
+            )
+        ).one_or_none()
+        if row is None:
+            raise PluginPaymentError("USDT 支付订单不存在")
+        payment, order = row
+        if order.status != OrderStatus.PENDING_PAYMENT:
+            raise PluginPaymentError("订单已处理或失效")
+        duplicate = await session.scalar(
+            select(PluginPayment.id).where(
+                PluginPayment.provider == provider,
+                PluginPayment.transaction_id == proof,
+                PluginPayment.id != payment.id,
+            )
+        )
+        if duplicate is not None:
+            raise PluginPaymentError("该付款凭证已提交")
+        payment.transaction_id = proof
+        payment.status = "proof_pending"
+        payment.provider_data = {**payment.provider_data, "proof": proof}

@@ -364,3 +364,15 @@ def test_topup_menu_uses_only_configured_usdt_methods() -> None:
     for method in ("usdt_binance", "usdt_bep20", "usdt_trc20", "usdt_arbitrum"):
         assert method in topups
     assert "unsupported top-up method" in topups
+
+
+def test_direct_usdt_purchase_uses_neutral_price_and_manual_proof() -> None:
+    catalog = Path("app/handlers/catalog.py").read_text()
+    orders = Path("app/services/orders.py").read_text()
+    payments = Path("app/services/plugin_payments.py").read_text()
+    assert 'F.data.startswith("usdt:confirm:")' in catalog
+    assert 'F.data.startswith("usdt:create:")' in catalog
+    assert "ManualUsdtPurchase.proof" in catalog
+    assert '"usdt" if payment_provider.startswith("usdt_")' in orders
+    assert 'payment.status = "proof_pending"' in payments
+    assert "PluginPayment.transaction_id == proof" in payments

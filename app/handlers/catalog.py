@@ -57,6 +57,10 @@ class ManualTopup(StatesGroup):
     proof = State()
 
 
+class ManualUsdtPurchase(StatesGroup):
+    proof = State()
+
+
 def _home_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -777,6 +781,123 @@ async def callback_category(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("usdt:confirm:"))
+async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
+    try:
+        _, _, method_id, raw_product_id = callback.data.split(":", 3)
+        product_id = uuid.UUID(raw_product_id)
+    except (ValueError, IndexError):
+        await callback.answer("Invalid payment request.", show_alert=True)
+        return
+    method = get_usdt_method(settings, method_id)
+    if method is None or not method.available:
+        await callback.answer("This payment method is unavailable.", show_alert=True)
+        return
+    async with SessionFactory() as session:
+        products = await list_products(session)
+    product = next((item for item in products if item.id == product_id), None)
+    if product is None or "usdt" not in product.plugin_prices:
+        await callback.answer("This payment option is unavailable.", show_alert=True)
+        return
+    await callback.answer()
+    _, amount_minor = product.plugin_prices["usdt"]
+    await callback.message.answer(
+        "🧾 <b>Confirm USDT purchase</b>\n\n"
+        f"Product: {html.escape(product.name)}\n"
+        f"Price: ${amount_minor / 100:.2f} USDT\n"
+        f"Payment: {html.escape(method.label)}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="✅ Create payment order",
+                    callback_data=f"usdt:create:{method.id}:{product.id}",
+                )
+            ], [
+                InlineKeyboardButton(
+                    text="⬅️ Back", callback_data=f"shop:product:{product.id}"
+                )
+            ]]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("usdt:create:"))
+async def create_usdt_purchase(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    try:
+        _, _, method_id, raw_product_id = callback.data.split(":", 3)
+        product_id = uuid.UUID(raw_product_id)
+    except (ValueError, IndexError):
+        await callback.answer("Invalid payment request.", show_alert=True)
+        return
+    method = get_usdt_method(settings, method_id)
+    if method is None or not method.available:
+        await callback.answer("This payment method is unavailable.", show_alert=True)
+        return
+    try:
+        async with SessionFactory() as session:
+            order = await create_order(
+                session,
+                telegram_user_id=callback.from_user.id,
+                username=callback.from_user.username,
+                display_name=callback.from_user.full_name,
+                product_id=product_id,
+                payment_provider=method.id,
+            )
+        from app.services.plugin_payments import reserve_plugin_payment
+
+        async with SessionFactory() as session:
+            await reserve_plugin_payment(
+                session, order_id=order.order_id, provider=method.id
+            )
+    except ShopError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.set_state(ManualUsdtPurchase.proof)
+    await state.update_data(
+        usdt_order_id=str(order.order_id),
+        usdt_provider=method.id,
+        usdt_proof_label=method.proof_label,
+    )
+    await callback.answer("Order created")
+    await callback.message.answer(
+        "💳 <b>USDT payment order</b>\n\n"
+        f"Order: <code>{order.public_id}</code>\n"
+        f"Amount: <b>${order.total_amount / 100:.2f} USDT</b>\n"
+        f"Send to: <code>{html.escape(method.destination)}</code>\n"
+        f"Network: {html.escape(method.label)}\n\n"
+        f"After payment, send the {html.escape(method.proof_label)} here."
+    )
+
+
+@router.message(ManualUsdtPurchase.proof)
+async def submit_usdt_purchase_proof(message: Message, state: FSMContext) -> None:
+    from app.services.plugin_payments import (
+        PluginPaymentError,
+        submit_manual_usdt_proof,
+    )
+
+    data = await state.get_data()
+    try:
+        order_id = uuid.UUID(data["usdt_order_id"])
+        provider = str(data["usdt_provider"])
+        async with SessionFactory() as session:
+            await submit_manual_usdt_proof(
+                session,
+                order_id=order_id,
+                provider=provider,
+                proof=message.text or "",
+            )
+    except (ValueError, KeyError, PluginPaymentError) as exc:
+        await message.answer(f"❌ {html.escape(str(exc))}")
+        return
+    await state.clear()
+    await message.answer(
+        "✅ Payment proof submitted. Delivery will begin after administrator review."
+    )
+
+
 @router.callback_query(F.data.startswith("shop:product:"))
 async def callback_product_detail(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -795,6 +916,7 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         variants = await list_product_variants(session, product.id)
     rows = []
+    available = product.stock > 0 or product.supplier_stock
     if len(variants) > 1:
         for variant in variants:
             available_variant = variant.stock > 0 or variant.supplier_stock
@@ -832,6 +954,17 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
                 )
             ]
         )
+    if available and "usdt" in product.plugin_prices:
+        _, usdt_amount = product.plugin_prices["usdt"]
+        for method in available_usdt_methods(settings):
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{method.label} · ${usdt_amount / 100:.2f}",
+                        callback_data=f"usdt:confirm:{method.id}:{product.id}",
+                    )
+                ]
+            )
     plugin_product = PluginProduct(
         id=product.id,
         name=product.name,
@@ -840,7 +973,6 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
             for provider, (currency, amount) in product.plugin_prices.items()
         },
     )
-    available = product.stock > 0 or product.supplier_stock
     if available:
         for plugin in get_plugin_registry().plugins:
             button = plugin.catalog_button(plugin_product)

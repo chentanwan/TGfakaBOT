@@ -301,10 +301,13 @@ async def create_order(
             currency = "XTR"
             total_amount = sku.price_xtr
         else:
+            price_provider = (
+                "usdt" if payment_provider.startswith("usdt_") else payment_provider
+            )
             plugin_price = await session.scalar(
                 select(ProductPrice).where(
                     ProductPrice.sku_id == sku.id,
-                    ProductPrice.provider == payment_provider,
+                    ProductPrice.provider == price_provider,
                     ProductPrice.is_active.is_(True),
                 )
             )
