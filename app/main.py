@@ -13,6 +13,7 @@ from app.handlers import admin, catalog, charge_admin, payment_admin
 from app.plugins import configure_plugins
 from app.plugins.http import start_plugin_http_server
 from app.services.cleanup import cleanup_loop
+from app.services.usdt_auto import usdt_verification_loop
 
 
 async def main() -> None:
@@ -45,11 +46,13 @@ async def main() -> None:
     for plugin in plugin_registry.plugins:
         await plugin.startup(bot)
     cleanup_task = asyncio.create_task(cleanup_loop(bot))
+    verification_task = asyncio.create_task(usdt_verification_loop(bot))
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
         cleanup_task.cancel()
-        await asyncio.gather(cleanup_task, return_exceptions=True)
+        verification_task.cancel()
+        await asyncio.gather(cleanup_task, verification_task, return_exceptions=True)
         for plugin in reversed(plugin_registry.plugins):
             await plugin.shutdown()
         if plugin_http_runner is not None:

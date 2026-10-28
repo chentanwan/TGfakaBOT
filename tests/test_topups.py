@@ -50,9 +50,34 @@ def test_usdt_payment_proof_formats_are_network_specific() -> None:
 
 def test_admin_has_masked_usdt_configuration_health_panel() -> None:
     source = Path("app/handlers/admin.py").read_text()
-    assert 'text="🩺 USDT 支付配置"' in source
+    assert 'text="⚙️ 支付设置"' in source
     assert 'F.data == "adm:usdt:health"' in source
     assert "configured_usdt_methods" in source
     assert "is_valid_destination" in source
     assert "_mask_payment_destination" in source
     assert 'value[:4]' in source and 'value[-4:]' in source
+
+
+def test_usdt_automatic_verification_checks_chain_evidence() -> None:
+    verifier = Path("app/services/usdt_verification.py").read_text()
+    worker = Path("app/services/usdt_auto.py").read_text()
+    assert "eth_getTransactionReceipt" in verifier
+    assert "eth_blockNumber" in verifier
+    assert "wallet/gettransactioninfobyid" in verifier
+    assert "_TRANSFER_TOPIC" in verifier
+    assert "到账金额不匹配" in verifier
+    assert "automatic_verification_available" in verifier
+    assert "fulfill_plugin_payment(" in worker
+    assert "review_topup(" in worker
+    assert 'PluginPayment.status == "proof_pending"' in worker
+
+
+def test_binance_is_not_automatically_verified_without_merchant_api() -> None:
+    source = Path("app/services/usdt_verification.py").read_text()
+    assert 'method_id == "usdt_bep20"' in source
+    assert 'method_id == "usdt_arbitrum"' in source
+    assert 'method_id == "usdt_trc20"' in source
+    section = source[
+        source.index("def automatic_verification_available") : source.index("def _tron_hex")
+    ]
+    assert 'method_id == "usdt_binance"' not in section

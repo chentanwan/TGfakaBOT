@@ -242,3 +242,10 @@ This command is idempotent. It creates three example products from `examples/pro
 - Default tier thresholds are $100 / $500 / $1000.
 - Referral rewards apply to successful balance purchases and credit the referrer balance.
 - Public customer API access should be placed behind HTTPS and reverse-proxy rate limiting in addition to application limits.
+
+## Automatic USDT verification
+
+The administrator menu exposes `⚙️ 支付设置`. BEP20, TRC20 and Arbitrum can automatically verify submitted transaction hashes when `USDT_AUTO_VERIFY_ENABLED=true` and a trusted RPC/API plus the correct network USDT contract are configured. Verification requires a successful transaction, the configured token contract, the snapshotted destination, the exact USD-cent amount and the configured confirmation count before balance credit or order fulfillment.
+
+Binance Pay is not automatically approved without merchant API credentials. A user-supplied Binance order number is not proof of payment, so that channel remains unavailable to the automatic verifier until an official merchant-query integration is configured. RPC/API failures and insufficient confirmations remain pending and are retried; definitive failed transactions, wrong contracts, destinations or amounts are rejected without delivery.
+

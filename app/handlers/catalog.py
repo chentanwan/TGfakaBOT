@@ -14,9 +14,11 @@ from aiogram.types import (
     Message,
     PreCheckoutQuery,
 )
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.i18n import LANGUAGE_NAMES, text
+from app.db.models import PluginPayment
 from app.db.session import SessionFactory
 from app.plugins.base import PluginPrice, PluginProduct
 from app.plugins.registry import get_plugin_registry
@@ -646,8 +648,15 @@ async def manual_topup_proof(message: Message, state: FSMContext) -> None:
         await message.answer(f"❌ {html.escape(str(exc))}")
         return
     await state.clear()
+    from app.services.usdt_auto import verify_topup
+    outcome = await verify_topup(record.id)
+    status_text = (
+        "✅ Payment automatically verified and balance credited."
+        if outcome.state.startswith("approved")
+        else "✅ Submitted. Automatic payment verification is in progress."
+    )
     await message.answer(
-        f"✅ Submitted and waiting for administrator review.\nReference: <code>{record.id}</code>",
+        f"{status_text}\nReference: <code>{record.id}</code>",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="« Main menu", callback_data="shop:home")]]
         ),
@@ -896,13 +905,22 @@ async def submit_usdt_purchase_proof(message: Message, state: FSMContext) -> Non
                 provider=provider,
                 proof=message.text or "",
             )
+            payment_id = await session.scalar(
+                select(PluginPayment.id).where(PluginPayment.order_id == order_id)
+            )
+        if payment_id is None:
+            raise PluginPaymentError("USDT 支付记录不存在")
     except (ValueError, KeyError, PluginPaymentError) as exc:
         await message.answer(f"❌ {html.escape(str(exc))}")
         return
     await state.clear()
-    await message.answer(
-        "✅ Payment proof submitted. Delivery will begin after administrator review."
-    )
+    from app.services.usdt_auto import _notify_delivery, verify_order
+    outcome = await verify_order(payment_id)
+    await _notify_delivery(message.bot, outcome)
+    if outcome.state == "paid":
+        await message.answer("✅ Payment automatically verified. Fulfillment has started.")
+    else:
+        await message.answer("✅ Payment proof submitted. Automatic verification is in progress.")
 
 
 @router.callback_query(F.data.startswith("shop:product:"))

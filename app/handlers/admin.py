@@ -66,7 +66,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🏭 供应商管理", callback_data="adm:suppliers")],
         [InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list")],
         [InlineKeyboardButton(text="₮ USDT 订单审核", callback_data="adm:usdt:list")],
-        [InlineKeyboardButton(text="🩺 USDT 支付配置", callback_data="adm:usdt:health")],
+        [InlineKeyboardButton(text="⚙️ 支付设置", callback_data="adm:usdt:health")],
         [InlineKeyboardButton(text="👤 用户查询", callback_data="adm:user:find")],
         [InlineKeyboardButton(text="📣 全体广播", callback_data="adm:broadcast")],
         [InlineKeyboardButton(text="⚠️ 支付异常", callback_data="adm:pex:list")],
@@ -296,19 +296,22 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
         await callback.answer("无权限", show_alert=True)
         return
     from app.services.usdt_methods import configured_usdt_methods, is_valid_destination
+    from app.services.usdt_verification import automatic_verification_available
 
     await callback.answer()
-    lines = ["🩺 <b>USDT 支付配置</b>"]
+    lines = ["⚙️ <b>支付设置</b>"]
     for method in configured_usdt_methods(settings):
         configured = bool(method.destination.strip())
         valid = is_valid_destination(method.id, method.destination)
         visible = method.available
+        auto_verify = automatic_verification_available(settings, method.id)
         destination = _mask_payment_destination(method.destination) if configured else "未配置"
         lines.append(
             f"\n<b>{html.escape(method.label)}</b>"
             f"\n启用：{'是' if method.enabled else '否'}"
             f" · 格式：{'有效' if valid else '无效'}"
             f" · 显示：{'是' if visible else '否'}"
+            f" · 自动核验：{'可用' if auto_verify else '不可用'}"
             f"\n收款目标：<code>{html.escape(destination)}</code>"
         )
     await callback.message.answer("".join(lines))
