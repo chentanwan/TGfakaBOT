@@ -154,3 +154,25 @@ def test_supplier_fulfillment_supports_multiple_encrypted_cards() -> None:
     assert "len(delivered_secrets) != item.quantity" in source
     assert "for secret in delivered_secrets" in source
     assert "len(set(delivered_secrets))" in source
+
+
+def test_supplier_adapter_contract_is_independent_from_prodseller() -> None:
+    source = Path("app/plugins/supplier.py").read_text()
+    assert "class SupplierAdapter(Protocol)" in source
+    assert "async def get_product" in source
+    assert "async def create_order" in source
+    assert "async def list_orders" in source
+    assert "prodseller" not in source.lower()
+
+
+def test_supplier_errors_are_classified_before_recovery_polling() -> None:
+    plugin = object.__new__(ProdsellerPlugin)
+    assert plugin._failure_status(ProdsellerError("stock", status=409)) == "failed"
+    assert plugin._failure_status(ProdsellerError("rate", status=429)) == "unknown"
+    assert plugin._failure_status(ProdsellerError("server", status=500)) == "unknown"
+
+
+def test_supplier_polling_honors_retry_after() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "exc.rate_limit.retry_after" in source
+    assert "delay = max(delay, exc.rate_limit.retry_after)" in source

@@ -192,10 +192,11 @@ class ProdsellerPlugin:
                 )
         except (ProdsellerError, SupplierFulfillmentError) as exc:
             logger.exception("ProdSeller fulfillment failed for %s", context.public_id)
+            status = self._failure_status(exc)
             await self._save_result(
                 context.order_id,
                 supplier_order.external_order_id,
-                "unknown",
+                status,
                 None,
                 supplier_order.response_data,
                 str(exc),
@@ -221,11 +222,16 @@ class ProdsellerPlugin:
 
     async def _poll_pending_orders(self) -> None:
         while True:
+            delay = max(10, self.settings.prodseller_order_poll_seconds)
             try:
                 await self._poll_pending_once()
+            except ProdsellerError as exc:
+                logger.exception("ProdSeller pending-order poll failed")
+                if exc.status == 429 and exc.rate_limit.retry_after:
+                    delay = max(delay, exc.rate_limit.retry_after)
             except Exception:
                 logger.exception("ProdSeller pending-order poll failed")
-            await asyncio.sleep(max(10, self.settings.prodseller_order_poll_seconds))
+            await asyncio.sleep(delay)
 
     async def _poll_pending_once(self) -> None:
         from app.db.models import SupplierOrder
@@ -886,6 +892,14 @@ class ProdsellerPlugin:
                 response_data=safe_response,
                 last_error=error,
             )
+
+    @staticmethod
+    def _failure_status(exc: Exception) -> str:
+        if isinstance(exc, SupplierFulfillmentError):
+            return "failed"
+        if isinstance(exc, ProdsellerError) and not exc.retryable:
+            return "failed"
+        return "unknown"
 
     def _sale_price(self, cost_minor: int) -> int:
         multiplier = (Decimal(100) + self.settings.prodseller_profit_percent) / Decimal(100)
