@@ -358,18 +358,25 @@ async def approve_manual_usdt_payment(
         user = await session.get(User, order.user_id)
         if user is None:
             raise PluginPaymentError("用户不存在")
-        return PluginDelivery(user.telegram_user_id, order.public_id, "", "", False), True
+        delivery = PluginDelivery(user.telegram_user_id, order.public_id, "", "", False)
+        await session.rollback()
+        return delivery, True
     if payment.status != "proof_pending" or not payment.transaction_id:
         raise PluginPaymentError("付款凭证尚未处于待审核状态")
     order = await session.get(Order, payment.order_id)
     if order is None:
         raise PluginPaymentError("订单不存在")
+    provider = payment.provider
+    transaction_id = payment.transaction_id
+    amount_minor = payment.amount_minor
+    public_id = order.public_id
+    await session.rollback()
     delivery = await fulfill_plugin_payment(
         session,
-        provider=payment.provider,
-        merchant_order_id=order.public_id,
-        transaction_id=payment.transaction_id,
-        amount_minor=payment.amount_minor,
+        provider=provider,
+        merchant_order_id=public_id,
+        transaction_id=transaction_id,
+        amount_minor=amount_minor,
         event={"type": "manual_admin_approval", "admin_id": admin_telegram_id},
         provider_data={"reviewed_by_telegram_id": admin_telegram_id},
     )

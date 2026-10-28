@@ -401,3 +401,11 @@ def test_usdt_review_snapshots_destination_and_requires_confirmation() -> None:
     assert "create_confirmation" in admin
     assert "consume_confirmation" in admin
     assert '"proof_pending"' in cleanup
+
+
+def test_manual_usdt_approval_ends_lookup_transaction_before_fulfillment() -> None:
+    source = Path("app/services/plugin_payments.py").read_text()
+    start = source.index("async def approve_manual_usdt_payment")
+    body = source[start:source.index("async def reject_manual_usdt_payment", start)]
+    assert "await session.rollback()" in body
+    assert body.index("await session.rollback()") < body.index("await fulfill_plugin_payment(")
