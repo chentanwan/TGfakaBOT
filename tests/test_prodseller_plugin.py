@@ -265,3 +265,12 @@ def test_admin_can_inspect_sync_and_suspend_supplier_mapping() -> None:
     assert "最近同步" in source
     assert 'action="supplier_mapping_toggle"' in source
     assert "await self.client.get_product(mapping.external_product_id)" in source
+
+
+def test_suspended_supplier_mapping_is_not_sellable_or_fulfillable() -> None:
+    orders = Path("app/services/orders.py").read_text()
+    payments = Path("app/services/plugin_payments.py").read_text()
+    assert "not supplier.suspended_for_profit" in orders
+    assert "not item.suspended_for_profit" in orders
+    assert orders.count("SupplierProduct.suspended_for_profit.is_(False)") >= 2
+    assert "SupplierProduct.suspended_for_profit.is_(False)" in payments

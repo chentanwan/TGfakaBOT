@@ -140,7 +140,9 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
         )
     ).scalars().all() if sku_ids else []
     supplier_skus = {
-        supplier.sku_id for supplier in supplier_rows if supplier.in_stock
+        supplier.sku_id
+        for supplier in supplier_rows
+        if supplier.in_stock and not supplier.suspended_for_profit
     }
     prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
     for price in price_rows:
@@ -215,7 +217,11 @@ async def list_product_variants(
             select(SupplierProduct).where(SupplierProduct.sku_id.in_(sku_ids))
         )
     ).all() if sku_ids else []
-    supplier_stock = {item.sku_id for item in suppliers if item.in_stock}
+    supplier_stock = {
+        item.sku_id
+        for item in suppliers
+        if item.in_stock and not item.suspended_for_profit
+    }
     prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
     for price in prices:
         prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
@@ -277,7 +283,9 @@ async def create_order(
         )
         supplier = await session.scalar(
             select(SupplierProduct).where(
-                SupplierProduct.sku_id == sku.id, SupplierProduct.in_stock.is_(True)
+                SupplierProduct.sku_id == sku.id,
+                SupplierProduct.in_stock.is_(True),
+                SupplierProduct.suspended_for_profit.is_(False),
             )
         )
         if card is None and supplier is None:
@@ -525,6 +533,7 @@ async def match_and_fulfill_payment(
                         select(SupplierProduct).where(
                             SupplierProduct.sku_id == item.sku_id,
                             SupplierProduct.in_stock.is_(True),
+                SupplierProduct.suspended_for_profit.is_(False),
                         )
                     ) if item else None
                     if card is None and supplier is not None:

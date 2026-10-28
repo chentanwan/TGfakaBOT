@@ -169,7 +169,9 @@ async def fulfill_plugin_payment(
         )
         supplier = await session.scalar(
             select(SupplierProduct).where(
-                SupplierProduct.sku_id == item.sku_id, SupplierProduct.in_stock.is_(True)
+                SupplierProduct.sku_id == item.sku_id,
+                SupplierProduct.in_stock.is_(True),
+                SupplierProduct.suspended_for_profit.is_(False),
             )
         ) if item else None
         if card is None and supplier is not None:
