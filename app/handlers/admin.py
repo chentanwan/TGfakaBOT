@@ -3,6 +3,7 @@ import html
 import uuid
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -51,6 +52,7 @@ class BalanceAdjustment(StatesGroup):
 
 class AdminBroadcast(StatesGroup):
     content = State()
+    confirmation = State()
 
 
 def is_admin(user_id: int) -> bool:
@@ -336,8 +338,11 @@ async def reject_topup_reason(message: Message, state: FSMContext) -> None:
         topup_id = uuid.UUID(data["reject_topup_id"])
         async with SessionFactory() as session:
             record, telegram_user_id, duplicate = await review_topup(
-                session, topup_id=topup_id, admin_telegram_id=message.from_user.id,
-                approve=False, rejection_reason=reason,
+                session,
+                topup_id=topup_id,
+                admin_telegram_id=message.from_user.id,
+                approve=False,
+                rejection_reason=reason,
             )
     except (ValueError, KeyError) as exc:
         await message.answer(f"处理失败：{html.escape(str(exc))}")
@@ -347,8 +352,7 @@ async def reject_topup_reason(message: Message, state: FSMContext) -> None:
     if not duplicate:
         await message.bot.send_message(
             telegram_user_id,
-            f"❌ Top-up rejected: ${record.amount_minor / 100:.2f}.\n"
-            f"Reason: {html.escape(reason)}",
+            f"❌ Top-up rejected: ${record.amount_minor / 100:.2f}.\nReason: {html.escape(reason)}",
         )
 
 
@@ -388,11 +392,13 @@ async def admin_user_find(message: Message, state: FSMContext) -> None:
         f"总消费：${user.total_spent_minor / 100:.2f}\n"
         f"状态：{html.escape(user.status)}",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="💰 调整余额", callback_data=f"adm:user:balance:{telegram_id}"
-                )
-            ]]
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💰 调整余额", callback_data=f"adm:user:balance:{telegram_id}"
+                    )
+                ]
+            ]
         ),
     )
 
@@ -419,7 +425,9 @@ async def admin_balance_save(message: Message, state: FSMContext) -> None:
         telegram_id = int(data["adjust_user_id"])
         async with SessionFactory() as session:
             balance = await adjust_user_balance(
-                session, telegram_user_id=telegram_id, delta_minor=delta_minor,
+                session,
+                telegram_user_id=telegram_id,
+                delta_minor=delta_minor,
                 admin_telegram_id=message.from_user.id,
             )
     except (ValueError, KeyError) as exc:
@@ -453,18 +461,68 @@ async def admin_broadcast_send(message: Message, state: FSMContext) -> None:
         return
     async with SessionFactory() as session:
         recipients = await list_broadcast_user_ids(session)
+    await state.update_data(broadcast_content=content)
+    await state.set_state(AdminBroadcast.confirmation)
+    await message.answer(
+        f"📣 即将向 {len(recipients)} 个用户广播：\n\n{html.escape(content)}\n\n确认发送？",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ 确认发送", callback_data="adm:broadcast:confirm", style="success"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ 取消", callback_data="adm:broadcast:cancel", style="danger"
+                    ),
+                ]
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "adm:broadcast:cancel")
+async def admin_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    await state.clear()
+    await callback.answer("已取消", show_alert=True)
+
+
+@router.callback_query(F.data == "adm:broadcast:confirm")
+async def admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    data = await state.get_data()
+    content = data.get("broadcast_content", "")
+    if not content:
+        await callback.answer("广播内容已失效", show_alert=True)
+        return
+    async with SessionFactory() as session:
+        recipients = await list_broadcast_user_ids(session)
         async with session.begin():
             await record_admin_action(
-                session, admin_telegram_id=message.from_user.id, action="user_broadcast",
-                target_type="users", details={"recipient_count": len(recipients)},
+                session,
+                admin_telegram_id=callback.from_user.id,
+                action="user_broadcast",
+                target_type="users",
+                details={"recipient_count": len(recipients)},
             )
     await state.clear()
+    await callback.answer("开始发送")
     sent = failed = 0
     for telegram_id in recipients:
         try:
-            await message.bot.send_message(telegram_id, html.escape(content))
+            await callback.bot.send_message(telegram_id, html.escape(content))
             sent += 1
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await callback.bot.send_message(telegram_id, html.escape(content))
+                sent += 1
+            except Exception:
+                failed += 1
         except Exception:
             failed += 1
         await asyncio.sleep(0.05)
-    await message.answer(f"📣 广播完成\n成功：{sent}\n失败：{failed}")
+    await callback.message.answer(f"📣 广播完成\n成功：{sent}\n失败：{failed}")
