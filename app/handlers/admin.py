@@ -182,7 +182,7 @@ async def cards_import(message: Message, state: FSMContext) -> None:
     try:
         product_id = uuid.UUID(data["product_id"])
         async with SessionFactory() as session:
-            inserted, duplicate = await import_cards(
+            result = await import_cards(
                 session,
                 product_id=product_id,
                 secrets=(message.text or "").splitlines(),
@@ -192,9 +192,17 @@ async def cards_import(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer(
-        f"✅ 导入完成\n成功：{inserted}\n重复/跳过：{duplicate}",
+        f"✅ 导入完成\n成功：{result.inserted}\n重复/跳过：{result.duplicates}",
         reply_markup=admin_keyboard(),
     )
+    if settings.restock_broadcast_chat_id and result.inserted:
+        await message.bot.send_message(
+            settings.restock_broadcast_chat_id,
+            f"📦 <b>{html.escape(result.product_name)}</b>\n\n"
+            f"➕ Added: {result.inserted}\n"
+            f"📦 Current stock: {result.current_stock}\n"
+            f"💵 Unit price: ⭐ {result.unit_price_xtr}",
+        )
 
 
 @router.callback_query(F.data.startswith("adm:toggle:"))

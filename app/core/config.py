@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     binance_pay_uid: str = ""
     minimum_topup_minor: int = 10
     usdt_bep20_address: str = ""
+    restock_broadcast_chat_id: int | None = None
     database_url: str = "postgresql+asyncpg://tgfakabot:change-me@localhost:5432/tgfakabot"
     redis_url: str = "redis://localhost:6379/0"
     card_encryption_key: str

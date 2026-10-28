@@ -19,6 +19,15 @@ class AdminProduct:
     available: int
 
 
+@dataclass(slots=True)
+class RestockResult:
+    inserted: int
+    duplicates: int
+    current_stock: int
+    unit_price_xtr: int
+    product_name: str
+
+
 async def create_product(
     session: AsyncSession, *, name: str, description: str, price_xtr: int
 ) -> Product:
@@ -71,27 +80,28 @@ async def list_admin_products(session: AsyncSession) -> list[AdminProduct]:
 
 async def import_cards(
     session: AsyncSession, *, product_id: uuid.UUID, secrets: list[str]
-) -> tuple[int, int]:
+) -> RestockResult:
     normalized = list(dict.fromkeys(secret.strip() for secret in secrets if secret.strip()))
     if not normalized:
-        return 0, 0
+        raise ValueError("没有可导入的卡密")
     if len(normalized) > 500:
         raise ValueError("单次最多导入 500 条卡密")
     async with session.begin():
-        sku_id = await session.scalar(
-            select(SKU.id).where(
+        sku = await session.scalar(
+            select(SKU).where(
                 SKU.product_id == product_id,
                 SKU.is_default.is_(True),
             )
         )
-        if sku_id is None:
+        if sku is None:
             raise ValueError("商品不存在")
+        product_name = await session.scalar(select(Product.name).where(Product.id == product_id))
         inserted = 0
         for secret in normalized:
             result = await session.execute(
                 insert(Card)
                 .values(
-                    sku_id=sku_id,
+                    sku_id=sku.id,
                     secret_ciphertext=card_vault.encrypt(secret),
                     secret_fingerprint=card_vault.fingerprint(secret),
                     status=CardStatus.AVAILABLE.value,
@@ -99,7 +109,16 @@ async def import_cards(
                 .on_conflict_do_nothing(index_elements=["secret_fingerprint"])
             )
             inserted += result.rowcount or 0
-    return inserted, len(normalized) - inserted
+        current_stock = await session.scalar(
+            select(func.count(Card.id)).where(
+                Card.sku_id == sku.id, Card.status == CardStatus.AVAILABLE
+            )
+        )
+    return RestockResult(
+        inserted=inserted, duplicates=len(normalized) - inserted,
+        current_stock=int(current_stock or 0), unit_price_xtr=sku.price_xtr,
+        product_name=product_name or "",
+    )
 
 
 async def toggle_product(session: AsyncSession, product_id: uuid.UUID) -> ProductStatus:
