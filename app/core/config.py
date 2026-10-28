@@ -29,9 +29,15 @@ class Settings(BaseSettings):
     tier_silver_spend_minor: int = 10000
     tier_gold_spend_minor: int = 50000
     tier_platinum_spend_minor: int = 100000
+    binance_pay_enabled: bool = False
     binance_pay_uid: str = ""
     minimum_topup_minor: int = 10
+    usdt_bep20_enabled: bool = False
     usdt_bep20_address: str = ""
+    usdt_trc20_enabled: bool = False
+    usdt_trc20_address: str = ""
+    usdt_arbitrum_enabled: bool = False
+    usdt_arbitrum_address: str = ""
     restock_broadcast_chat_id: int | None = None
     database_url: str = "postgresql+asyncpg://tgfakabot:change-me@localhost:5432/tgfakabot"
     redis_url: str = "redis://localhost:6379/0"

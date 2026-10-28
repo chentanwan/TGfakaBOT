@@ -339,3 +339,17 @@ def test_supplier_management_is_grouped_under_one_admin_menu() -> None:
         "plugin:prodseller:health",
     ):
         assert callback in plugin
+
+
+def test_prodseller_uses_neutral_usdt_sale_price() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert 'ProductPrice.provider == "usdt"' in source
+    assert 'provider="usdt"' in source
+    assert 'ProductPrice.provider == "bepusdt"' not in source
+
+
+def test_usdt_methods_require_enablement_and_destination() -> None:
+    source = Path("app/services/usdt_methods.py").read_text()
+    for method in ("usdt_binance", "usdt_bep20", "usdt_trc20", "usdt_arbitrum"):
+        assert method in source
+    assert "self.enabled and bool(self.destination.strip())" in source

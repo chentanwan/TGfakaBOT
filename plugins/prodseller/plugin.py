@@ -836,7 +836,7 @@ class ProdsellerPlugin:
                     .outerjoin(
                         ProductPrice,
                         (ProductPrice.sku_id == SKU.id)
-                        & (ProductPrice.provider == "bepusdt"),
+                        & (ProductPrice.provider == "usdt"),
                     )
                     .where(
                         Product.id == product_id,
@@ -1023,7 +1023,7 @@ class ProdsellerPlugin:
                 select(ProductPrice)
                 .where(
                     ProductPrice.sku_id == mapping.sku_id,
-                    ProductPrice.provider == "bepusdt",
+                    ProductPrice.provider == "usdt",
                 )
                 .with_for_update()
             )
@@ -1035,7 +1035,7 @@ class ProdsellerPlugin:
             mapping.suspended_for_profit = False
             mapping.suspension_reason = None
         await callback.answer("已应用建议售价")
-        await callback.message.answer("✅ 已更新并启用 BEpusdt 建议售价。")
+        await callback.message.answer("✅ 已更新并启用 USDT 建议售价。")
 
     async def _start_custom_price(
         self, callback: CallbackQuery, state: FSMContext
@@ -1078,7 +1078,7 @@ class ProdsellerPlugin:
                     select(ProductPrice)
                     .where(
                         ProductPrice.sku_id == mapping.sku_id,
-                        ProductPrice.provider == "bepusdt",
+                        ProductPrice.provider == "usdt",
                     )
                     .with_for_update()
                 )
@@ -1265,7 +1265,7 @@ class ProdsellerPlugin:
             session.add(
                 ProductPrice(
                     sku_id=sku.id,
-                    provider="bepusdt",
+                    provider="usdt",
                     currency="USD",
                     amount_minor=sale_minor,
                     is_active=False,
@@ -1314,7 +1314,7 @@ class ProdsellerPlugin:
                 price = await session.scalar(
                     select(ProductPrice).where(
                         ProductPrice.sku_id == mapping.sku_id,
-                        ProductPrice.provider == "bepusdt",
+                        ProductPrice.provider == "usdt",
                     )
                 )
                 required_sale = self._sale_price(new_cost)

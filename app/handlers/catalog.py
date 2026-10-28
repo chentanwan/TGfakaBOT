@@ -98,8 +98,8 @@ def _home_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 def _product_price(product) -> str:
-    if "bepusdt" in product.plugin_prices:
-        currency, amount = product.plugin_prices["bepusdt"]
+    if "usdt" in product.plugin_prices:
+        currency, amount = product.plugin_prices["usdt"]
         return f"{amount / 100:.2f} {currency}"
     return f"⭐ {product.price_xtr}"
 
