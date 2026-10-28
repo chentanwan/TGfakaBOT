@@ -398,6 +398,7 @@ async def reject_manual_usdt_payment(
     *,
     payment_id: uuid.UUID,
     admin_telegram_id: int,
+    rejection_reason: str = "rejected by administrator",
 ) -> tuple[int, str, bool]:
     async with session.begin():
         row = (
@@ -428,7 +429,7 @@ async def reject_manual_usdt_payment(
             card.order_item_id = None
             card.reserved_until = None
         payment.status = "rejected"
-        payment.last_error = "rejected by administrator"
+        payment.last_error = rejection_reason.strip()[:2000]
         order.status = OrderStatus.EXPIRED
         await record_admin_action(
             session, admin_telegram_id=admin_telegram_id,

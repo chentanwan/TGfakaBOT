@@ -119,11 +119,15 @@ async def _verify_evm(
         else settings.usdt_arbitrum_token_contract
     ).lower()
     timeout = aiohttp.ClientTimeout(total=settings.usdt_verify_timeout_seconds)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        receipt, latest = await asyncio.gather(
-            _rpc(session, rpc_url, "eth_getTransactionReceipt", [tx_hash]),
-            _rpc(session, rpc_url, "eth_blockNumber", []),
-        )
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            receipt, latest = await asyncio.gather(
+                _rpc(session, rpc_url, "eth_getTransactionReceipt", [tx_hash]),
+                _rpc(session, rpc_url, "eth_blockNumber", []),
+            )
+    except (aiohttp.ClientError, TimeoutError, VerificationError) as exc:
+        logger.warning("EVM USDT verification unavailable: %s", exc)
+        return VerificationResult("pending", reason="链上查询服务暂时不可用")
     if receipt is None:
         return VerificationResult("pending", reason="交易尚未上链")
     if receipt.get("status") != "0x1":
@@ -163,15 +167,19 @@ async def _verify_tron(
     headers = {"TRON-PRO-API-KEY": settings.usdt_tron_api_key} if settings.usdt_tron_api_key else {}
     base = settings.usdt_tron_api_url.rstrip("/")
     timeout = aiohttp.ClientTimeout(total=settings.usdt_verify_timeout_seconds)
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        async with session.post(
-            f"{base}/wallet/gettransactioninfobyid", json={"value": tx_hash}
-        ) as response:
-            response.raise_for_status()
-            info = await response.json()
-        async with session.post(f"{base}/wallet/getnowblock", json={}) as response:
-            response.raise_for_status()
-            current = await response.json()
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.post(
+                f"{base}/wallet/gettransactioninfobyid", json={"value": tx_hash}
+            ) as response:
+                response.raise_for_status()
+                info = await response.json()
+            async with session.post(f"{base}/wallet/getnowblock", json={}) as response:
+                response.raise_for_status()
+                current = await response.json()
+    except (aiohttp.ClientError, TimeoutError, VerificationError) as exc:
+        logger.warning("TRON USDT verification unavailable: %s", exc)
+        return VerificationResult("pending", reason="链上查询服务暂时不可用")
     if not info or not info.get("blockNumber"):
         return VerificationResult("pending", reason="交易尚未上链")
     if info.get("receipt", {}).get("result", "SUCCESS") != "SUCCESS":

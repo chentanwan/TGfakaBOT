@@ -13,7 +13,13 @@ async def main() -> None:
     token = "0x" + "b" * 40
     tron_address = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"
     tron_hex = _tron_hex(tron_address)
-    state = {"evm_amount": 1_000_000, "evm_status": "0x1", "latest": 111}
+    state = {
+        "evm_amount": 1_000_000,
+        "evm_status": "0x1",
+        "latest": 111,
+        "evm_token": token,
+        "evm_destination": destination,
+    }
 
     async def rpc(request: web.Request) -> web.Response:
         payload = await request.json()
@@ -115,6 +121,35 @@ async def main() -> None:
             expected_amount_minor=100,
         )
         assert result.state == "rejected" and result.reason == "链上交易执行失败"
+        state["evm_status"] = "0x1"
+        state["evm_token"] = "0x" + "c" * 40
+        result = await verify_usdt_payment(
+            settings,
+            method_id="usdt_bep20",
+            proof="0x" + "5" * 64,
+            destination=destination,
+            expected_amount_minor=100,
+        )
+        assert result.state == "rejected"
+        state["evm_token"] = token
+        state["evm_destination"] = "0x" + "d" * 40
+        result = await verify_usdt_payment(
+            settings,
+            method_id="usdt_bep20",
+            proof="0x" + "6" * 64,
+            destination=destination,
+            expected_amount_minor=100,
+        )
+        assert result.state == "rejected"
+        settings.usdt_bep20_rpc_url = "http://127.0.0.1:1/unavailable"
+        result = await verify_usdt_payment(
+            settings,
+            method_id="usdt_bep20",
+            proof="0x" + "7" * 64,
+            destination=destination,
+            expected_amount_minor=100,
+        )
+        assert result.state == "pending" and result.reason == "链上查询服务暂时不可用"
         result = await verify_usdt_payment(
             settings,
             method_id="usdt_trc20",

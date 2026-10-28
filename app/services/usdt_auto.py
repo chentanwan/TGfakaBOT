@@ -126,7 +126,10 @@ async def verify_order(payment_id) -> AutoVerificationOutcome:
     if result.state == "rejected":
         async with SessionFactory() as session:
             telegram_user_id, _, _ = await reject_manual_usdt_payment(
-                session, payment_id=payment_id, admin_telegram_id=0
+                session,
+                payment_id=payment_id,
+                admin_telegram_id=0,
+                rejection_reason=f"Automatic verification: {result.reason}",
             )
         return AutoVerificationOutcome(
             "rejected",
