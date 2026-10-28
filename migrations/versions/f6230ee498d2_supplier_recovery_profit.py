@@ -4,6 +4,7 @@ Revision ID: f6230ee498d2
 Revises: 84a969fb7192
 Create Date: 2026-10-27
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -16,19 +17,18 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+        return
     op.add_column(
         "supplier_products",
         sa.Column("last_synced_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.add_column(
         "supplier_products",
-        sa.Column(
-            "suspended_for_profit", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("suspended_for_profit", sa.Boolean(), server_default=sa.false(), nullable=False),
     )
-    op.add_column(
-        "supplier_products", sa.Column("suspension_reason", sa.Text(), nullable=True)
-    )
+    op.add_column("supplier_products", sa.Column("suspension_reason", sa.Text(), nullable=True))
     op.alter_column("supplier_products", "suspended_for_profit", server_default=None)
     op.add_column("supplier_orders", sa.Column("recovery_note", sa.Text(), nullable=True))
     op.add_column(

@@ -18,6 +18,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+        return
     op.create_table(
         "product_prices",
         sa.Column("sku_id", sa.UUID(), nullable=False),

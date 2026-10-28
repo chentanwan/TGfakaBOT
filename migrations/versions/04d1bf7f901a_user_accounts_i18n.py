@@ -4,6 +4,7 @@ Revision ID: 04d1bf7f901a
 Revises: f6230ee498d2
 Create Date: 2026-10-28
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -16,15 +17,16 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+        return
     op.add_column(
         "users", sa.Column("language_code", sa.String(10), server_default="en", nullable=False)
     )
     op.add_column(
         "users", sa.Column("balance_minor", sa.BigInteger(), server_default="0", nullable=False)
     )
-    op.add_column(
-        "users", sa.Column("points", sa.BigInteger(), server_default="0", nullable=False)
-    )
+    op.add_column("users", sa.Column("points", sa.BigInteger(), server_default="0", nullable=False))
     op.add_column(
         "users", sa.Column("tier", sa.String(32), server_default="bronze", nullable=False)
     )

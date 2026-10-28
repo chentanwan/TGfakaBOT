@@ -4,6 +4,7 @@ Revision ID: 84a969fb7192
 Revises: 4d5c3be21a7f
 Create Date: 2026-10-26
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -17,6 +18,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+        return
     op.add_column(
         "skus",
         sa.Column("stars_enabled", sa.Boolean(), server_default=sa.true(), nullable=False),
@@ -54,9 +58,7 @@ def upgrade() -> None:
             "external_product_id",
             name=op.f("uq_supplier_products_provider"),
         ),
-        sa.UniqueConstraint(
-            "sku_id", "provider", name=op.f("uq_supplier_products_sku_id")
-        ),
+        sa.UniqueConstraint("sku_id", "provider", name=op.f("uq_supplier_products_sku_id")),
     )
     op.create_table(
         "supplier_orders",

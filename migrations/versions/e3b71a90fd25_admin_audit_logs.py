@@ -17,6 +17,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+        return
     op.create_table(
         "admin_audit_logs",
         sa.Column("id", sa.Uuid(), nullable=False),

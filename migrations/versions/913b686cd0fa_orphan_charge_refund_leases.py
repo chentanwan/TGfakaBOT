@@ -4,6 +4,7 @@ Revision ID: 913b686cd0fa
 Revises: 8f6b71b67f0a
 Create Date: 2026-10-22
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -17,6 +18,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+        return
     op.add_column("payment_charges", sa.Column("related_order_id", sa.Uuid(), nullable=True))
     op.add_column("payment_charges", sa.Column("telegram_user_id", sa.BigInteger(), nullable=True))
     op.add_column(
@@ -40,8 +44,7 @@ def upgrade() -> None:
     )
     op.drop_constraint("payment_status", "payment_charges", type_="check")
     op.execute(
-        "UPDATE payment_charges SET status = 'refund_unknown' "
-        "WHERE status = 'refund_pending'"
+        "UPDATE payment_charges SET status = 'refund_unknown' WHERE status = 'refund_pending'"
     )
     op.create_check_constraint(
         "payment_status",
@@ -58,8 +61,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_constraint("payment_status", "payment_charges", type_="check")
     op.execute(
-        "UPDATE payment_charges SET status = 'refund_failed' "
-        "WHERE status = 'refund_unknown'"
+        "UPDATE payment_charges SET status = 'refund_failed' WHERE status = 'refund_unknown'"
     )
     op.create_check_constraint(
         "payment_status",
@@ -67,9 +69,7 @@ def downgrade() -> None:
         "status IN ('succeeded','refund_pending','refunded','refund_failed')",
     )
     op.drop_index("ix_payment_charges_resolution", table_name="payment_charges")
-    op.drop_constraint(
-        "fk_payment_charges_related_order", "payment_charges", type_="foreignkey"
-    )
+    op.drop_constraint("fk_payment_charges_related_order", "payment_charges", type_="foreignkey")
     op.drop_column("payment_charges", "refund_lease_expires_at")
     op.drop_column("payment_charges", "refund_claimed_at")
     op.drop_column("payment_charges", "refund_claim_token")

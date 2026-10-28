@@ -4,6 +4,7 @@ Revision ID: c01ab8ca51d7
 Revises: 913b686cd0fa
 Create Date: 2026-10-23
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -16,6 +17,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("_tgfakabot_schema_bootstrap"):
+        return
     op.add_column(
         "payment_charges", sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True)
     )
