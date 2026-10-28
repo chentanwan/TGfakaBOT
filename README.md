@@ -172,26 +172,19 @@ MIT
 
 Optional features live outside the core application under `plugins/` and are loaded with `PLUGIN_MODULES`. Core exposes only generic extension points for Telegram routers, catalog/admin buttons, HTTP callback routes, product prices, and idempotent payment fulfillment. New provider-specific code must not be added to `app/services/orders.py` or other provider-neutral core modules.
 
-The first plugin is `plugins.bepusdt`, compatible with the self-hosted [BEpusdt gateway](https://github.com/v03413/BEpusdt):
-
-1. Set `PLUGIN_MODULES=plugins.bepusdt`.
-2. Configure `BEPUSDT_BASE_URL`, `BEPUSDT_API_TOKEN`, and HTTPS `BEPUSDT_PUBLIC_BASE_URL`.
-3. Route `BEPUSDT_PUBLIC_BASE_URL/plugins/bepusdt/notify` to the bot container's plugin HTTP port (default `8081`).
-4. In `/admin` → product list, use **设置 BEpusdt 价格**. A product only displays the USDT option after a fiat price is enabled.
-
-BEpusdt remains a separately deployed gateway. TGfakaBOT does not hold wallet private keys. Callbacks are signature-verified, stored idempotently, and a unique chain transaction ID cannot fulfill more than one order. Gateway timeout/ambiguous creation results are quarantined instead of automatically recreating a payment transaction.
+USDT product prices are provider-neutral (`ProductPrice.provider = usdt`). The enabled payment rail is stored separately on each order as `usdt_binance`, `usdt_bep20`, `usdt_trc20`, or `usdt_arbitrum`. Manual USDT payments require a unique payment proof, administrator review, and a one-time confirmation token before fulfillment. Binance Pay remains hidden until explicitly enabled and configured. Telegram Stars remains available independently.
 
 ## ProdSeller supplier plugin
 
-`plugins.prodseller` integrates the [ProdSeller v1 API](https://prodseller.com/api-docs/) as an upstream inventory provider. Product costs and BEpusdt sale prices are denominated in **USD cents**. The API key is read only from `PRODSELLER_API_KEY`; never commit it.
+`plugins.prodseller` integrates the [ProdSeller v1 API](https://prodseller.com/api-docs/) as an upstream inventory provider. Product costs and USDT sale prices are denominated in **USD cents**. The API key is read only from `PRODSELLER_API_KEY`; never commit it.
 
 Admin workflow:
 
 1. Enable `plugins.prodseller` in `PLUGIN_MODULES`.
 2. Use `/admin` → **ProdSeller balance** to verify authentication.
 3. Select **Import ProdSeller product** and paste an upstream product ID.
-4. The bot imports instant-delivery products only, imports them as draft, disables Stars for those SKUs, and creates a disabled BEpusdt USD price with the configured markup.
-5. Review and enable the BEpusdt price before selling. **Sync upstream** refreshes cost and stock for imported products.
+4. The bot imports instant-delivery products only, imports them as draft, disables Stars for those SKUs, and creates a disabled neutral USDT price with the configured markup.
+5. Review and enable the USDT price before selling. **Sync upstream** refreshes cost and stock for imported products.
 
 After a successful customer payment, the supplier purchase uses `Idempotency-Key: tgfakabot-<public order id>`. Before purchase it re-reads the authoritative product detail and verifies current total cost, exact stock, quantity, and email requirements. Quantity purchases are sent upstream as one idempotent order; every returned key is individually validated, encrypted into the normal card vault, and committed atomically. Products requiring customer email activation are intentionally rejected until a dedicated customer-email consent flow exists.
 

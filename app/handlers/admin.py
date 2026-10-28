@@ -311,7 +311,8 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
             f"网络：{html.escape(record.method_label)}\n"
             f"收款目标：<code>{html.escape(record.destination)}</code>\n"
             f"金额：${record.amount_minor / 100:.2f}\n"
-            f"凭证：<code>{html.escape(record.proof)}</code>",
+            f"凭证：<code>{html.escape(record.proof)}</code>\n"
+            f"状态：{'⚠️ 已超过 24 小时' if record.overdue else '待审核'}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(
                     text="✅ 确认到账",
@@ -482,7 +483,8 @@ async def pending_topups(callback: CallbackQuery) -> None:
             f"用户：{html.escape(record.display_name)} (<code>{record.telegram_user_id}</code>)\n"
             f"方式：{html.escape(record.method)}\n"
             f"金额：${record.amount_minor / 100:.2f}\n"
-            f"凭证：<code>{html.escape(record.proof)}</code>",
+            f"凭证：<code>{html.escape(record.proof)}</code>\n"
+            f"状态：{'⚠️ 已超过 24 小时' if record.overdue else '待审核'}",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [

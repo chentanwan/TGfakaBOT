@@ -15,9 +15,9 @@ def test_admin_ids_parse_csv() -> None:
 def test_plugin_modules_parse_csv() -> None:
     settings = Settings(
         bot_token="token",
-        plugin_modules="plugins.bepusdt, plugins.example",
+        plugin_modules="plugins.prodseller, plugins.example",
         card_encryption_key="key",
         card_fingerprint_key="fingerprint",
     )
 
-    assert settings.plugin_modules == ("plugins.bepusdt", "plugins.example")
+    assert settings.plugin_modules == ("plugins.prodseller", "plugins.example")

@@ -307,6 +307,7 @@ class ManualUsdtReview:
     destination: str
     method_label: str
     created_at: object
+    overdue: bool
 
 
 async def list_manual_usdt_reviews(
@@ -335,6 +336,7 @@ async def list_manual_usdt_reviews(
             str(payment.provider_data.get("destination") or ""),
             str(payment.provider_data.get("method_label") or payment.provider),
             payment.created_at,
+            (datetime.now(UTC) - payment.created_at).total_seconds() > 86400,
         )
         for payment, order, item, user in rows
     ]

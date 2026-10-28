@@ -243,6 +243,7 @@ class PluginPayment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("amount_minor >= 1", name="positive_amount_minor"),
         UniqueConstraint("provider", "external_id"),
+        UniqueConstraint("provider", "transaction_id"),
         Index("ix_plugin_payments_provider_status", "provider", "status"),
     )
 
@@ -257,7 +258,7 @@ class PluginPayment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     checkout_url: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    transaction_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    transaction_id: Mapped[str | None] = mapped_column(String(255))
     provider_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     last_event: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text)

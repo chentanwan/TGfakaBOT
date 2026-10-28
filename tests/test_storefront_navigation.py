@@ -16,10 +16,10 @@ def test_storefront_has_layered_navigation() -> None:
         assert callback in source
 
 
-def test_bepusdt_requires_purchase_confirmation() -> None:
-    source = Path("plugins/bepusdt/plugin.py").read_text()
-    assert "plugin:bepusdt:confirm:" in source
-    assert "Continue to payment" in source
+def test_usdt_requires_purchase_confirmation() -> None:
+    source = Path("app/handlers/catalog.py").read_text()
+    assert "usdt:confirm:" in source
+    assert "usdt:create:" in source
 
 
 def test_catalog_service_exposes_categories_and_order_status() -> None:
