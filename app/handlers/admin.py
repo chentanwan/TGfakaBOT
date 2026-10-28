@@ -1,3 +1,4 @@
+import asyncio
 import html
 import uuid
 
@@ -10,7 +11,15 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.core.config import get_settings
 from app.db.session import SessionFactory
 from app.plugins.registry import get_plugin_registry
-from app.services.admin import create_product, import_cards, list_admin_products, toggle_product
+from app.services.admin import (
+    adjust_user_balance,
+    create_product,
+    find_admin_user,
+    import_cards,
+    list_admin_products,
+    list_broadcast_user_ids,
+    toggle_product,
+)
 from app.services.topups import list_pending_topups, review_topup
 
 router = Router(name="admin")
@@ -31,6 +40,18 @@ class TopupRejection(StatesGroup):
     reason = State()
 
 
+class UserLookup(StatesGroup):
+    telegram_id = State()
+
+
+class BalanceAdjustment(StatesGroup):
+    amount = State()
+
+
+class AdminBroadcast(StatesGroup):
+    content = State()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in settings.admin_ids
 
@@ -40,6 +61,8 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new")],
         [InlineKeyboardButton(text="📦 商品与库存", callback_data="adm:list")],
         [InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list")],
+        [InlineKeyboardButton(text="👤 用户查询", callback_data="adm:user:find")],
+        [InlineKeyboardButton(text="📣 全体广播", callback_data="adm:broadcast")],
         [InlineKeyboardButton(text="⚠️ 支付异常", callback_data="adm:pex:list")],
         [InlineKeyboardButton(text="⏳ 退款处理中", callback_data="adm:refunds:pending")],
         [InlineKeyboardButton(text="🧾 孤立支付流水", callback_data="adm:charges:list")],
@@ -322,3 +345,115 @@ async def reject_topup_reason(message: Message, state: FSMContext) -> None:
             f"❌ Top-up rejected: ${record.amount_minor / 100:.2f}.\n"
             f"Reason: {html.escape(reason)}",
         )
+
+
+@router.callback_query(F.data == "adm:user:find")
+async def admin_user_find_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(UserLookup.telegram_id)
+    await callback.message.answer("请输入用户 Telegram 数字 ID：")
+
+
+@router.message(UserLookup.telegram_id)
+async def admin_user_find(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        telegram_id = int((message.text or "").strip())
+    except ValueError:
+        await message.answer("请输入有效数字 ID。")
+        return
+    async with SessionFactory() as session:
+        user = await find_admin_user(session, telegram_id)
+    if user is None:
+        await message.answer("用户不存在。")
+        return
+    await state.clear()
+    username = f"@{user.username}" if user.username else "—"
+    await message.answer(
+        "👤 <b>用户资料</b>\n"
+        f"ID：<code>{user.telegram_user_id}</code>\n"
+        f"用户名：{html.escape(username)}\n"
+        f"余额：${user.balance_minor / 100:.2f}\n"
+        f"积分：{user.points}\n"
+        f"订单：{user.order_count}\n"
+        f"总消费：${user.total_spent_minor / 100:.2f}\n"
+        f"状态：{html.escape(user.status)}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="💰 调整余额", callback_data=f"adm:user:balance:{telegram_id}"
+                )
+            ]]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:user:balance:"))
+async def admin_balance_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    telegram_id = int(callback.data.rsplit(":", 1)[1])
+    await state.set_state(BalanceAdjustment.amount)
+    await state.update_data(adjust_user_id=telegram_id)
+    await callback.answer()
+    await callback.message.answer("输入调整金额（USD），例如 10 或 -5.50：")
+
+
+@router.message(BalanceAdjustment.amount)
+async def admin_balance_save(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    try:
+        delta_minor = round(float((message.text or "").strip()) * 100)
+        telegram_id = int(data["adjust_user_id"])
+        async with SessionFactory() as session:
+            balance = await adjust_user_balance(
+                session, telegram_user_id=telegram_id, delta_minor=delta_minor
+            )
+    except (ValueError, KeyError) as exc:
+        await message.answer(f"调整失败：{html.escape(str(exc))}")
+        return
+    await state.clear()
+    await message.answer(f"✅ 调整完成，当前余额：${balance / 100:.2f}")
+    await message.bot.send_message(
+        telegram_id,
+        f"💰 Your balance was adjusted by an administrator. Current balance: ${balance / 100:.2f}",
+    )
+
+
+@router.callback_query(F.data == "adm:broadcast")
+async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(AdminBroadcast.content)
+    await callback.message.answer("请输入要广播的消息；发送 /cancel 取消：")
+
+
+@router.message(AdminBroadcast.content)
+async def admin_broadcast_send(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    content = (message.text or "").strip()
+    if not 1 <= len(content) <= 4000:
+        await message.answer("广播内容长度应为 1–4000 字符。")
+        return
+    async with SessionFactory() as session:
+        recipients = await list_broadcast_user_ids(session)
+    await state.clear()
+    sent = failed = 0
+    for telegram_id in recipients:
+        try:
+            await message.bot.send_message(telegram_id, html.escape(content))
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+    await message.answer(f"📣 广播完成\n成功：{sent}\n失败：{failed}")

@@ -132,3 +132,56 @@ async def toggle_product(session: AsyncSession, product_id: uuid.UUID) -> Produc
             ProductStatus.DRAFT if product.status == ProductStatus.ACTIVE else ProductStatus.ACTIVE
         )
         return product.status
+
+
+@dataclass(slots=True)
+class AdminUser:
+    telegram_user_id: int
+    username: str | None
+    display_name: str
+    balance_minor: int
+    points: int
+    order_count: int
+    total_spent_minor: int
+    status: str
+
+
+async def find_admin_user(session: AsyncSession, telegram_user_id: int) -> AdminUser | None:
+    from app.db.models import User
+    user = await session.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
+    if user is None:
+        return None
+    return AdminUser(
+        telegram_user_id=user.telegram_user_id, username=user.username,
+        display_name=user.display_name or "", balance_minor=user.balance_minor,
+        points=user.points, order_count=user.order_count,
+        total_spent_minor=user.total_spent_minor, status=user.status.value,
+    )
+
+
+async def adjust_user_balance(
+    session: AsyncSession, *, telegram_user_id: int, delta_minor: int
+) -> int:
+    from app.db.models import User
+    if delta_minor == 0:
+        raise ValueError("调整金额不能为 0")
+    async with session.begin():
+        user = await session.scalar(
+            select(User).where(User.telegram_user_id == telegram_user_id).with_for_update()
+        )
+        if user is None:
+            raise ValueError("用户不存在")
+        if user.balance_minor + delta_minor < 0:
+            raise ValueError("余额不能变成负数")
+        user.balance_minor += delta_minor
+        return user.balance_minor
+
+
+async def list_broadcast_user_ids(session: AsyncSession) -> list[int]:
+    from app.db.base import UserStatus
+    from app.db.models import User
+    return list(
+        await session.scalars(
+            select(User.telegram_user_id).where(User.status == UserStatus.ACTIVE)
+        )
+    )
