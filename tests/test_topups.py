@@ -46,3 +46,13 @@ def test_usdt_payment_proof_formats_are_network_specific() -> None:
     assert 'r"[A-Za-z0-9_-]{6,64}\\Z"' in source
     assert "normalize_and_validate_proof" in source
     assert "value = value.lower()" in source
+
+
+def test_admin_has_masked_usdt_configuration_health_panel() -> None:
+    source = Path("app/handlers/admin.py").read_text()
+    assert 'text="🩺 USDT 支付配置"' in source
+    assert 'F.data == "adm:usdt:health"' in source
+    assert "configured_usdt_methods" in source
+    assert "is_valid_destination" in source
+    assert "_mask_payment_destination" in source
+    assert 'value[:4]' in source and 'value[-4:]' in source
