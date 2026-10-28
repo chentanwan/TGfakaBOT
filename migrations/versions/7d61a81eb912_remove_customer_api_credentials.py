@@ -17,7 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_table("user_api_credentials")
+    op.execute("DROP TABLE IF EXISTS user_api_credentials")
 
 
 def downgrade() -> None:
