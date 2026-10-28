@@ -353,3 +353,14 @@ def test_usdt_methods_require_enablement_and_destination() -> None:
     for method in ("usdt_binance", "usdt_bep20", "usdt_trc20", "usdt_arbitrum"):
         assert method in source
     assert "self.enabled and bool(self.destination.strip())" in source
+
+
+def test_topup_menu_uses_only_configured_usdt_methods() -> None:
+    catalog = Path("app/handlers/catalog.py").read_text()
+    assert "available_usdt_methods(settings)" in catalog
+    assert 'callback_data=f"topup:start:{method.id}"' in catalog
+    assert "topup:start:cryptobot" not in catalog
+    topups = Path("app/services/topups.py").read_text()
+    for method in ("usdt_binance", "usdt_bep20", "usdt_trc20", "usdt_arbitrum"):
+        assert method in topups
+    assert "unsupported top-up method" in topups

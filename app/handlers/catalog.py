@@ -41,6 +41,7 @@ from app.services.orders import (
     validate_pre_checkout,
 )
 from app.services.topups import list_user_topups, submit_topup
+from app.services.usdt_methods import available_usdt_methods, get_usdt_method
 
 router = Router(name="catalog")
 settings = get_settings()
@@ -550,65 +551,52 @@ async def account_methods(callback: CallbackQuery) -> None:
 async def account_topup(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.clear()
+    methods = available_usdt_methods(settings)
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=method.label, callback_data=f"topup:start:{method.id}"
+            )
+        ]
+        for method in methods
+    ]
+    rows.append([InlineKeyboardButton(text="« Back", callback_data="shop:home")])
+    message = (
+        "💳 <b>Top-up methods</b>\nChoose a USDT payment method:"
+        if methods
+        else "💳 <b>Top-up methods</b>\nNo USDT payment method is currently enabled."
+    )
     await callback.message.answer(
-        "💳 <b>Top-up methods</b>\nChoose a payment method:",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🔶 Binance Pay", callback_data="topup:start:binance")],
-                [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="topup:start:cryptobot")],
-                [
-                    InlineKeyboardButton(
-                        text="₮ USDT BEP20 (BSC)", callback_data="topup:start:bep20"
-                    )
-                ],
-                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
-            ]
-        ),
+        message, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
 
 
 @router.callback_query(F.data.startswith("topup:start:"))
 async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None:
-    method = callback.data.rsplit(":", 1)[1]
-    await callback.answer()
-    if method == "cryptobot":
-        await callback.message.answer(
-            "Open CryptoBot automatic invoice flow:",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🤖 Create CryptoBot invoice",
-                            callback_data="plugin:cryptobot:topup",
-                        )
-                    ],
-                    [InlineKeyboardButton(text="« Back", callback_data="account:topup")],
-                ]
-            ),
-        )
+    method_id = callback.data.rsplit(":", 1)[1]
+    method = get_usdt_method(settings, method_id)
+    if method is None or not method.available:
+        await callback.answer("This payment method is unavailable.", show_alert=True)
         return
-    instructions = (
-        f"Send USDT to Binance Pay UID: <code>{html.escape(settings.binance_pay_uid)}</code>. "
-        "Then submit the Order ID."
-        if method == "binance"
-        else f"Send USDT on BSC to: <code>{html.escape(settings.usdt_bep20_address)}</code>. "
-        "Then submit the transaction hash."
+    await callback.answer()
+    await state.update_data(
+        topup_method=method.id,
+        topup_destination=method.destination,
+        topup_proof_label=method.proof_label,
     )
-    await state.update_data(topup_method=method)
     await state.set_state(ManualTopup.amount)
     await callback.message.answer(
-        f"💳 <b>{'Binance Pay' if method == 'binance' else 'USDT BEP20 (BSC)'}</b>\n"
-        f"{instructions}\n\n"
+        f"💳 <b>{html.escape(method.label)}</b>\n"
+        f"Send USDT to: <code>{html.escape(method.destination)}</code>.\n"
+        f"Then submit the {html.escape(method.proof_label)}.\n\n"
         f"💵 Minimum: ${settings.minimum_topup_minor / 100:.2f}\n"
         "How much did you send? Enter the USD amount:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✖ Cancel", callback_data="topup:cancel", style="danger"
-                    )
-                ]
-            ]
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="✖ Cancel", callback_data="topup:cancel", style="danger"
+                )
+            ]]
         ),
     )
 
@@ -633,7 +621,9 @@ async def manual_topup_amount(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(topup_amount_minor=amount_minor)
     await state.set_state(ManualTopup.proof)
-    await message.answer("Send the payment Order ID or transaction hash:")
+    data = await state.get_data()
+    proof_label = data.get("topup_proof_label", "transaction hash")
+    await message.answer(f"Send the {html.escape(str(proof_label))}:")
 
 
 @router.message(ManualTopup.proof)
