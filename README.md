@@ -193,7 +193,7 @@ Admin workflow:
 4. The bot imports instant-delivery products only, imports them as draft, disables Stars for those SKUs, and creates a disabled BEpusdt USD price with the configured markup.
 5. Review and enable the BEpusdt price before selling. **Sync upstream** refreshes cost and stock for imported products.
 
-After a successful customer payment, the supplier purchase uses `Idempotency-Key: tgfakabot-<public order id>`. Instant keys are encrypted into the normal card vault before delivery. Products requiring customer email activation are intentionally rejected until a dedicated customer-email consent flow exists.
+After a successful customer payment, the supplier purchase uses `Idempotency-Key: tgfakabot-<public order id>`. Before purchase it re-reads the authoritative product detail and verifies current total cost, exact stock, quantity, and email requirements. Quantity purchases are sent upstream as one idempotent order; every returned key is individually validated, encrypted into the normal card vault, and committed atomically. Products requiring customer email activation are intentionally rejected until a dedicated customer-email consent flow exists.
 
 Each supplier plugin owns independent pricing and synchronization variables. ProdSeller calculates the suggested USD sale price as `cost + percentage profit + fixed USD profit`, using `PRODSELLER_PROFIT_PERCENT` and `PRODSELLER_PROFIT_FIXED`. Its product catalog automatically refreshes every `PRODSELLER_PRODUCT_SYNC_MINUTES` minutes (default 60); pending fulfillment polling remains independently configured with `PRODSELLER_ORDER_POLL_SECONDS`.
 
@@ -207,7 +207,7 @@ Automatic product synchronization enforces the configured profit floor. If an ac
 
 ### Supplier operations controls
 
-The ProdSeller exception queue supports `all`, `failed`, `unknown`, `pending`, and `paid` filters with pagination. Each record has a redacted audit view and an authoritative recovery query. When profit protection disables a price, every configured administrator receives a Telegram alert with **use suggested price** and **custom price** actions. Custom prices below the current configured profit floor are rejected.
+The ProdSeller exception queue supports `all`, `failed`, `unknown`, `pending`, and `paid` filters with pagination. Each record has a redacted audit view and an authoritative recovery query. If an order-creation response is lost, the plugin scans recent upstream orders without creating another purchase; a unique safe match is recovered automatically, while ambiguous matches require an administrator to inspect and explicitly select a candidate. Background catalog sync and broad reconciliation stop at the `PRODSELLER_RATE_LIMIT_RESERVE` threshold so paid-order fulfillment retains API quota. When profit protection disables a price, every configured administrator receives a Telegram alert with **use suggested price** and **custom price** actions. Custom prices below the current configured profit floor are rejected.
 
 ## Full storefront capabilities / 完整商城能力
 
