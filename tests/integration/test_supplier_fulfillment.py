@@ -57,7 +57,7 @@ async def test_supplier_backed_order_can_deliver_without_local_stock(db_session)
         order_id=order.order_id,
         provider="prodseller",
         external_order_id="upstream-order-1",
-        delivered_secret="UPSTREAM-SECRET",
+        delivered_secrets=["UPSTREAM-SECRET"],
         supplier_amount_minor=400,
         supplier_response={"status": "delivered"},
         sale_currency="USD",

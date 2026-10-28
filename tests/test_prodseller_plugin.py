@@ -36,6 +36,46 @@ def test_amount_rejects_more_than_two_decimals() -> None:
         ProdsellerClient._amount("4.999")
 
 
+def test_product_detail_stock_shape_is_normalized() -> None:
+    product = ProdsellerClient._validate_product(
+        {"id": "p1", "name": "Item", "price": "1.25", "stock": 4}
+    )
+    assert product["stock"] == 4
+    assert product["inStock"] is True
+
+
+def test_multi_key_order_shape_is_normalized() -> None:
+    order = ProdsellerClient._validate_order(
+        {
+            "orderId": "o1",
+            "status": "delivered",
+            "quantity": 2,
+            "amount": "2.50",
+            "deliveredKeys": ["key-1", "key-2"],
+        }
+    )
+    assert order["deliveredKeys"] == ["key-1", "key-2"]
+    assert order["quantity"] == 2
+
+
+def test_single_key_order_is_normalized_to_list() -> None:
+    order = ProdsellerClient._validate_order(
+        {
+            "orderId": "o1",
+            "status": "delivered",
+            "amount": "1.25",
+            "deliveredKey": "key-1",
+        }
+    )
+    assert order["deliveredKeys"] == ["key-1"]
+
+
+def test_prodseller_error_classifies_retryability() -> None:
+    assert ProdsellerError("rate", status=429).retryable is True
+    assert ProdsellerError("server", status=500).retryable is True
+    assert ProdsellerError("stock", status=409).retryable is False
+
+
 def test_supplier_plugin_uses_upstream_idempotency_key() -> None:
     source = Path("plugins/prodseller/client.py").read_text()
     assert '"Idempotency-Key"' in source
@@ -98,3 +138,19 @@ def test_profit_suspension_notifies_and_offers_safe_repricing() -> None:
     assert "plugin:prodseller:suggest:" in source
     assert "plugin:prodseller:custom:" in source
     assert "售价低于当前最低安全售价" in source
+
+
+def test_supplier_purchase_preflight_checks_live_cost_stock_and_email() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "await self.client.get_product" in source
+    assert "current_cost_minor > context.sale_amount_minor" in source
+    assert "stock < context.quantity" in source
+    assert 'remote["requiresEmailActivation"]' in source
+    assert "quantity=context.quantity" in source
+
+
+def test_supplier_fulfillment_supports_multiple_encrypted_cards() -> None:
+    source = Path("app/services/supplier_fulfillment.py").read_text()
+    assert "len(delivered_secrets) != item.quantity" in source
+    assert "for secret in delivered_secrets" in source
+    assert "len(set(delivered_secrets))" in source

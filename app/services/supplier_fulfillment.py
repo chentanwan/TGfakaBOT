@@ -24,6 +24,7 @@ class SupplierPurchaseContext:
     currency: str
     sale_currency: str
     sale_amount_minor: int
+    quantity: int
 
 
 @dataclass(slots=True)
@@ -64,6 +65,7 @@ async def get_supplier_purchase_context(
         currency=supplier.cost_currency,
         sale_currency=order.currency,
         sale_amount_minor=order.total_amount,
+        quantity=item.quantity,
     )
 
 
@@ -73,14 +75,14 @@ async def fulfill_supplier_order(
     order_id: uuid.UUID,
     provider: str,
     external_order_id: str,
-    delivered_secret: str,
+    delivered_secrets: list[str],
     supplier_amount_minor: int,
     supplier_response: dict,
     sale_currency: str,
     sale_amount_minor: int,
 ) -> SupplierDelivery:
-    if not delivered_secret:
-        raise SupplierFulfillmentError("上游订单尚未交付卡密")
+    if not delivered_secrets or any(not secret for secret in delivered_secrets):
+        raise SupplierFulfillmentError("上游订单尚未完整交付卡密")
     now = datetime.now(UTC)
     async with session.begin():
         row = (
@@ -112,29 +114,37 @@ async def fulfill_supplier_order(
             order.status = OrderStatus.PAYMENT_EXCEPTION
             order.payment_exception_reason = f"{provider}_cost_exceeds_sale_price"
             raise SupplierFulfillmentError("上游采购成本高于本订单销售金额")
-        card = await session.scalar(
-            select(Card).where(Card.order_item_id == item.id).with_for_update()
-        )
-        if card is not None:
+        if len(delivered_secrets) != item.quantity:
+            raise SupplierFulfillmentError("上游交付数量与本地订单数量不一致")
+        cards = (
+            await session.scalars(
+                select(Card).where(Card.order_item_id == item.id).with_for_update()
+            )
+        ).all()
+        if cards:
             raise SupplierFulfillmentError("订单已有本地库存卡密，拒绝重复上游交付")
+        if len(set(delivered_secrets)) != len(delivered_secrets):
+            raise SupplierFulfillmentError("上游返回重复卡密，拒绝交付")
         # Supplier secrets are encrypted by the same vault and become regular delivered inventory.
         from app.core.security import card_vault
 
-        card = Card(
-            sku_id=item.sku_id,
-            secret_ciphertext=card_vault.encrypt(delivered_secret),
-            secret_fingerprint=card_vault.fingerprint(delivered_secret),
-            status=CardStatus.DELIVERED,
-            order_item_id=item.id,
-            delivered_at=now,
-        )
-        session.add(card)
+        for secret in delivered_secrets:
+            session.add(
+                Card(
+                    sku_id=item.sku_id,
+                    secret_ciphertext=card_vault.encrypt(secret),
+                    secret_fingerprint=card_vault.fingerprint(secret),
+                    status=CardStatus.DELIVERED,
+                    order_item_id=item.id,
+                    delivered_at=now,
+                )
+            )
         order.status = OrderStatus.FULFILLED
         order.fulfilled_at = now
         return SupplierDelivery(
             user.telegram_user_id,
             order.public_id,
             item.product_name_snapshot,
-            delivered_secret,
+            "\n".join(delivered_secrets),
             True,
         )

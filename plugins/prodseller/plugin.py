@@ -144,9 +144,19 @@ class ProdsellerPlugin:
             if supplier_order.external_order_id:
                 response = await self.client.get_order(supplier_order.external_order_id)
             else:
+                remote = await self.client.get_product(context.external_product_id)
+                current_cost_minor = self._minor(remote["price"]) * context.quantity
+                if current_cost_minor > context.sale_amount_minor:
+                    raise SupplierFulfillmentError("实时上游总成本高于本订单销售金额")
+                stock = remote.get("stock")
+                if stock is not None and stock < context.quantity:
+                    raise SupplierFulfillmentError("上游实时库存不足")
+                if remote["requiresEmailActivation"]:
+                    raise SupplierFulfillmentError("该上游商品需要客户邮箱，当前订单未收集邮箱")
                 response = await self.client.create_order(
                     external_product_id=context.external_product_id,
                     idempotency_key=f"tgfakabot-{context.public_id}",
+                    quantity=context.quantity,
                 )
             amount_minor = self._minor(response["amount"])
             external_order_id = response["orderId"]
@@ -160,14 +170,13 @@ class ProdsellerPlugin:
                     f"⏳ 订单 <code>{context.public_id}</code> 已提交上游，等待交付。",
                 )
                 return True
-            secret = self._delivered_secret(response)
             async with SessionFactory() as session:
                 delivery = await fulfill_supplier_order(
                     session,
                     order_id=context.order_id,
                     provider=PROVIDER,
                     external_order_id=external_order_id,
-                    delivered_secret=secret,
+                    delivered_secrets=self._delivered_secrets(response),
                     supplier_amount_minor=amount_minor,
                     supplier_response=response,
                     sale_currency=context.sale_currency,
@@ -257,7 +266,7 @@ class ProdsellerPlugin:
                         order_id=context.order_id,
                         provider=PROVIDER,
                         external_order_id=response["orderId"],
-                        delivered_secret=self._delivered_secret(response),
+                        delivered_secrets=self._delivered_secrets(response),
                         supplier_amount_minor=amount_minor,
                         supplier_response=response,
                         sale_currency=context.sale_currency,
@@ -548,7 +557,7 @@ class ProdsellerPlugin:
                 order_id=context.order_id,
                 provider=PROVIDER,
                 external_order_id=response["orderId"],
-                delivered_secret=self._delivered_secret(response),
+                delivered_secrets=self._delivered_secrets(response),
                 supplier_amount_minor=self._minor(response["amount"]),
                 supplier_response=response,
                 sale_currency=context.sale_currency,
@@ -889,13 +898,12 @@ class ProdsellerPlugin:
         return int(amount * 100)
 
     @staticmethod
-    def _delivered_secret(order: dict) -> str:
-        value = order.get("deliveredKey")
-        if isinstance(value, str) and value:
-            return value
+    def _delivered_secrets(order: dict) -> list[str]:
         values = order.get("deliveredKeys")
-        if isinstance(values, list) and values and all(isinstance(item, str) for item in values):
-            return "\n".join(values)
+        if isinstance(values, list) and values and all(
+            isinstance(item, str) and item for item in values
+        ):
+            return values
         raise SupplierFulfillmentError("上游 delivered 订单未包含卡密")
 
     @staticmethod
