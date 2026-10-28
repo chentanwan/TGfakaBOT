@@ -208,3 +208,47 @@ Automatic product synchronization enforces the configured profit floor. If an ac
 ### Supplier operations controls
 
 The ProdSeller exception queue supports `all`, `failed`, `unknown`, `pending`, and `paid` filters with pagination. Each record has a redacted audit view and an authoritative recovery query. When profit protection disables a price, every configured administrator receives a Telegram alert with **use suggested price** and **custom price** actions. Custom prices below the current configured profit floor are rejected.
+
+## Full storefront capabilities / 完整商城能力
+
+The current version supports seven user languages (`en`, `fr`, `ar`, `ru`, `zh`, `es`, `id`), USD account balances, points and configurable tiers, referrals, multi-plan products, quantity purchases, transactionally safe balance delivery, Telegram Stars, BEpusdt, ProdSeller, manual top-up review, optional CryptoBot top-ups, customer API keys, restock broadcasts, and administrator user/broadcast controls.
+
+### Required account configuration
+
+Set brand values (`BOT_USERNAME`, `BRAND_NAME`, `CHANNEL_HANDLE`, `SUPPORT_HANDLE`), tier thresholds, points rules and referral percentage in `.env`. Keep `REFERRAL_REWARD_PERCENT=0` until the commercial reward policy is approved.
+
+### Initialize example products
+
+After the database migration and environment configuration:
+
+```bash
+python -m scripts.init_demo
+```
+
+This command is idempotent. It creates three example products from `examples/products.json`, one balance-enabled plan per product and two encrypted inventory entries per plan. The `DEMO-*` delivery values are examples only and must never be used as real products.
+
+### Complete acceptance walkthrough
+
+1. Send `/start`; the user is registered and receives a referral code.
+2. Submit a Binance Pay or BEP20 top-up from **Top up**.
+3. Open `/admin` → **充值审核** and approve the record; the user balance increases once.
+4. Open **Products**, select a plan and quantity, and confirm a balance purchase.
+5. Verify that balance, inventory, points, total spending, tier and optional referral reward update together.
+6. Open **My orders** and reveal the delivery again.
+7. Open **API**, generate a key once, then query `GET /api/v1/account` or `/api/v1/products` with `Authorization: Bearer <key>`.
+8. Rotate the API key and verify the previous key returns HTTP 401.
+
+### Payment and deployment notes
+
+- CryptoBot requires a real `CRYPTOBOT_API_TOKEN` and a public HTTPS webhook route to `/plugins/cryptobot/notify`; leave `plugins.cryptobot` out of `PLUGIN_MODULES` until configured.
+- BEpusdt and ProdSeller remain independent plugins and retain their existing callback, idempotency and recovery controls.
+- `RESTOCK_BROADCAST_CHAT_ID` is optional. The bot must be permitted to post in that channel/group.
+- Run `alembic upgrade head` before every release. Back up PostgreSQL and the card encryption key before production migration.
+
+### Assumptions requiring operator confirmation
+
+- Account money and manual top-ups are denominated in USD cents.
+- Default tier thresholds are $100 / $500 / $1000.
+- Referral rewards apply to successful balance purchases and credit the referrer balance.
+- CryptoBot invoices use USDT and credit the submitted USD amount after an exact callback amount match.
+- Public customer API access should be placed behind HTTPS and reverse-proxy rate limiting in addition to application limits.

@@ -1,0 +1,5 @@
+[
+  {"name":"Demo VPN 30 Days","plan":"30 Days","stars":50,"balance_usd":"4.99","inventory":["DEMO-VPN-A","DEMO-VPN-B"]},
+  {"name":"Demo Streaming","plan":"Premium","stars":80,"balance_usd":"7.99","inventory":["DEMO-STREAM-A","DEMO-STREAM-B"]},
+  {"name":"Demo Gift Card","plan":"$10 Card","stars":100,"balance_usd":"10.99","inventory":["DEMO-GIFT-A","DEMO-GIFT-B"]}
+]
