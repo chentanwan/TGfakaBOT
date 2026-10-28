@@ -27,6 +27,10 @@ class CardImport(StatesGroup):
     content = State()
 
 
+class TopupRejection(StatesGroup):
+    reason = State()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in settings.admin_ids
 
@@ -268,25 +272,45 @@ async def approve_topup(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("adm:topup:reject:"))
-async def reject_topup(callback: CallbackQuery) -> None:
+async def reject_topup_start(callback: CallbackQuery, state: FSMContext) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
         topup_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    await state.set_state(TopupRejection.reason)
+    await state.update_data(reject_topup_id=str(topup_id))
+    await callback.answer()
+    await callback.message.answer("请输入拒绝原因；发送 /cancel 取消：")
+
+
+@router.message(TopupRejection.reason)
+async def reject_topup_reason(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    reason = (message.text or "").strip()
+    if not 1 <= len(reason) <= 500:
+        await message.answer("拒绝原因长度应为 1–500 字符。")
+        return
+    data = await state.get_data()
+    try:
+        topup_id = uuid.UUID(data["reject_topup_id"])
         async with SessionFactory() as session:
             record, telegram_user_id, duplicate = await review_topup(
-                session,
-                topup_id=topup_id,
-                admin_telegram_id=callback.from_user.id,
-                approve=False,
+                session, topup_id=topup_id, admin_telegram_id=message.from_user.id,
+                approve=False, rejection_reason=reason,
             )
-    except ValueError as exc:
-        await callback.answer(str(exc), show_alert=True)
+    except (ValueError, KeyError) as exc:
+        await message.answer(f"处理失败：{html.escape(str(exc))}")
         return
-    await callback.answer("该记录已处理" if duplicate else "已拒绝", show_alert=True)
+    await state.clear()
+    await message.answer("该记录已处理" if duplicate else "充值已拒绝。")
     if not duplicate:
-        await callback.bot.send_message(
+        await message.bot.send_message(
             telegram_user_id,
-            f"❌ Top-up rejected: ${record.amount_minor / 100:.2f}. Contact support if needed.",
+            f"❌ Top-up rejected: ${record.amount_minor / 100:.2f}.\n"
+            f"Reason: {html.escape(reason)}",
         )

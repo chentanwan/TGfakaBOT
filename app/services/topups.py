@@ -115,3 +115,26 @@ async def review_topup(
         record.reviewed_at = datetime.now(UTC)
         record.reviewed_by_telegram_id = admin_telegram_id
         return record, user.telegram_user_id, False
+
+
+async def list_user_topups(
+    session: AsyncSession, *, telegram_user_id: int, limit: int = 10
+) -> list[TopupSummary]:
+    rows = (
+        await session.execute(
+            select(BalanceTopup, User)
+            .join(User, User.id == BalanceTopup.user_id)
+            .where(User.telegram_user_id == telegram_user_id)
+            .order_by(BalanceTopup.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [
+        TopupSummary(
+            id=record.id, telegram_user_id=user.telegram_user_id,
+            display_name=user.display_name or str(user.telegram_user_id),
+            method=record.method, amount_minor=record.amount_minor,
+            proof=record.proof, status=record.status, created_at=record.created_at,
+        )
+        for record, user in rows
+    ]

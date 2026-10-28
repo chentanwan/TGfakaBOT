@@ -26,6 +26,7 @@ from app.services.accounts import (
     purchase_with_balance,
     set_account_language,
 )
+from app.services.api_keys import get_api_credential, rotate_api_key
 from app.services.orders import (
     ShopError,
     cancel_unpaid_order,
@@ -39,7 +40,7 @@ from app.services.orders import (
     submit_payment_receipt,
     validate_pre_checkout,
 )
-from app.services.topups import submit_topup
+from app.services.topups import list_user_topups, submit_topup
 
 router = Router(name="catalog")
 settings = get_settings()
@@ -344,7 +345,31 @@ async def account_balance(callback: CallbackQuery) -> None:
             inline_keyboard=[
                 [InlineKeyboardButton(text="💳 Top up", callback_data="account:topup")],
                 [InlineKeyboardButton(text="📖 Methods", callback_data="account:methods")],
+                [InlineKeyboardButton(text="🧾 Top-up history", callback_data="account:topups")],
                 [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:topups")
+async def account_topup_history(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with SessionFactory() as session:
+        records = await list_user_topups(session, telegram_user_id=callback.from_user.id)
+    lines = ["🧾 <b>Top-up history</b>"]
+    if not records:
+        lines.append("\nNo top-up records yet.")
+    for record in records:
+        lines.append(
+            f"\n<code>{str(record.id)[:8]}</code> · {html.escape(record.method)} · "
+            f"${record.amount_minor / 100:.2f} · {html.escape(record.status)}"
+        )
+    await callback.message.answer(
+        "".join(lines),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Balance", callback_data="account:balance")]
             ]
         ),
     )
@@ -590,12 +615,55 @@ async def manual_topup_proof(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "account:api")
-async def account_api_placeholder(callback: CallbackQuery) -> None:
+async def account_api(callback: CallbackQuery) -> None:
     await callback.answer()
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+        credential = await get_api_credential(session, callback.from_user.id)
+    if account is None:
+        return
+    key_text = (
+        f"<code>{html.escape(credential.prefix)}••••••••</code>"
+        if credential.prefix
+        else "Not generated"
+    )
+    last_used = (
+        credential.last_used_at.strftime("%m/%d/%Y %H:%M UTC")
+        if credential.last_used_at
+        else "Never"
+    )
     await callback.message.answer(
-        "🔗 <b>API</b>\n\nCustomer API access will be enabled in the API phase.",
+        "🔗 <b>Customer API</b>\n\n"
+        f"API Key: {key_text}\n"
+        f"Balance: ${account.balance_minor / 100:.2f}\n"
+        f"Requests: {credential.request_count}\n"
+        f"Last used: {last_used}\n"
+        f"Documentation: {html.escape(settings.api_docs_url)}\n\n"
+        "For security, the complete key is shown only immediately after generation.",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="shop:home")]]
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Regenerate Key", callback_data="account:api:rotate"
+                    )
+                ],
+                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:api:rotate")
+async def account_api_rotate(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with SessionFactory() as session:
+        api_key = await rotate_api_key(session, callback.from_user.id)
+    await callback.message.answer(
+        "🔑 <b>Your new API Key</b>\n\n"
+        f"<code>{html.escape(api_key)}</code>\n\n"
+        "Save it now. It will not be shown in full again, and the previous key is invalid.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="« API", callback_data="account:api")]]
         ),
     )
 
