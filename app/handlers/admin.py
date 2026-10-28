@@ -63,6 +63,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new")],
         [InlineKeyboardButton(text="📦 商品与库存", callback_data="adm:list")],
+        [InlineKeyboardButton(text="🏭 供应商管理", callback_data="adm:suppliers")],
         [InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list")],
         [InlineKeyboardButton(text="👤 用户查询", callback_data="adm:user:find")],
         [InlineKeyboardButton(text="📣 全体广播", callback_data="adm:broadcast")],
@@ -81,6 +82,41 @@ async def admin_home(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer("⚙️ <b>TGfakaBOT 管理后台</b>", reply_markup=admin_keyboard())
+
+
+@router.callback_query(F.data == "adm:suppliers")
+async def supplier_admin_home(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    await callback.answer()
+    plugins = get_plugin_registry().supplier_plugins
+    if not plugins:
+        await callback.message.answer("当前没有已加载的供应商插件。")
+        return
+    rows: list[list[InlineKeyboardButton]] = []
+    lines = ["🏭 <b>供应商管理</b>"]
+    for plugin in plugins:
+        display_name = getattr(plugin, "supplier_display_name", plugin.name)
+        lines.append(f"\n• {html.escape(display_name)} · <code>{html.escape(plugin.name)}</code>")
+        buttons = getattr(plugin, "supplier_admin_buttons", lambda: [])()
+        rows.extend(buttons)
+    rows.append([InlineKeyboardButton(text="« 返回管理后台", callback_data="adm:home")])
+    await callback.message.answer(
+        "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+
+
+@router.callback_query(F.data == "adm:home")
+async def admin_home_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    await callback.answer()
+    await state.clear()
+    await callback.message.answer(
+        "⚙️ <b>TGfakaBOT 管理后台</b>", reply_markup=admin_keyboard()
+    )
 
 
 @router.callback_query(F.data == "adm:new")

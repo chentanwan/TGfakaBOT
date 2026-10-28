@@ -55,6 +55,7 @@ class RoutingPriority(StatesGroup):
 class ProdsellerPlugin:
     name = PROVIDER
     supplier_provider = True
+    supplier_display_name = "ProdSeller"
 
     def __init__(self) -> None:
         self.settings = get_prodseller_settings()
@@ -124,6 +125,9 @@ class ProdsellerPlugin:
         )
 
     def admin_home_buttons(self) -> list[list[InlineKeyboardButton]]:
+        return []
+
+    def supplier_admin_buttons(self) -> list[list[InlineKeyboardButton]]:
         return [
             [
                 InlineKeyboardButton(

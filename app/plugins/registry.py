@@ -23,6 +23,14 @@ class PluginRegistry:
         return tuple(self._plugins)
 
     @property
+    def supplier_plugins(self) -> tuple[Plugin, ...]:
+        return tuple(
+            plugin
+            for plugin in self._plugins
+            if getattr(plugin, "supplier_provider", False)
+        )
+
+    @property
     def supplier_providers(self) -> frozenset[str]:
         return frozenset(
             plugin.name

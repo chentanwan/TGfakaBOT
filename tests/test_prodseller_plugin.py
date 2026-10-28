@@ -319,3 +319,23 @@ def test_routes_only_to_loaded_supplier_plugins() -> None:
     routing = Path("app/services/supplier_routing.py").read_text()
     assert "available_providers" in routing
     assert "SupplierProduct.provider.in_(available_providers)" in routing
+
+
+def test_supplier_management_is_grouped_under_one_admin_menu() -> None:
+    admin = Path("app/handlers/admin.py").read_text()
+    plugin = Path("plugins/prodseller/plugin.py").read_text()
+    registry = Path("app/plugins/registry.py").read_text()
+    assert 'text="🏭 供应商管理"' in admin
+    assert 'F.data == "adm:suppliers"' in admin
+    assert "supplier_plugins" in registry
+    assert "def supplier_admin_buttons" in plugin
+    assert "def admin_home_buttons" in plugin
+    assert "return []" in plugin
+    for callback in (
+        "plugin:prodseller:browse:0",
+        "plugin:prodseller:sync",
+        "plugin:prodseller:exceptions:all:0",
+        "plugin:prodseller:balance",
+        "plugin:prodseller:health",
+    ):
+        assert callback in plugin
