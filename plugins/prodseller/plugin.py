@@ -76,6 +76,15 @@ class ProdsellerPlugin:
             self._apply_suggested_price, F.data.startswith("plugin:prodseller:suggest:")
         )
         self.router.callback_query.register(
+            self._mapping_detail, F.data.startswith("plugin:prodseller:mapping:")
+        )
+        self.router.callback_query.register(
+            self._sync_mapping, F.data.startswith("plugin:prodseller:syncmapping:")
+        )
+        self.router.callback_query.register(
+            self._toggle_mapping, F.data.startswith("plugin:prodseller:togglemapping:")
+        )
+        self.router.callback_query.register(
             self._start_custom_price, F.data.startswith("plugin:prodseller:custom:")
         )
         self.router.callback_query.register(
@@ -99,7 +108,10 @@ class ProdsellerPlugin:
         return None
 
     def admin_product_button(self, product_id: uuid.UUID) -> InlineKeyboardButton | None:
-        return None
+        return InlineKeyboardButton(
+            text="🔌 ProdSeller 映射",
+            callback_data=f"plugin:prodseller:mapping:{product_id}",
+        )
 
     def admin_home_buttons(self) -> list[list[InlineKeyboardButton]]:
         return [
@@ -791,6 +803,127 @@ class ProdsellerPlugin:
                 f"订单：<code>{delivery.public_id}</code>\n"
                 f"卡密：<code>{html.escape(delivery.secret)}</code>",
             )
+
+    async def _mapping_detail(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        async with SessionFactory() as session:
+            row = (
+                await session.execute(
+                    select(Product, SKU, SupplierProduct, ProductPrice)
+                    .join(SKU, SKU.product_id == Product.id)
+                    .join(SupplierProduct, SupplierProduct.sku_id == SKU.id)
+                    .outerjoin(
+                        ProductPrice,
+                        (ProductPrice.sku_id == SKU.id)
+                        & (ProductPrice.provider == "bepusdt"),
+                    )
+                    .where(
+                        Product.id == product_id,
+                        SupplierProduct.provider == PROVIDER,
+                    )
+                )
+            ).first()
+        if row is None:
+            await callback.answer("该商品没有 ProdSeller 映射", show_alert=True)
+            return
+        product, _, mapping, price = row
+        suggested = self._sale_price(mapping.cost_amount_minor)
+        actual = price.amount_minor if price else None
+        profit = actual - mapping.cost_amount_minor if actual is not None else None
+        from aiogram.types import InlineKeyboardMarkup
+
+        await callback.answer()
+        await callback.message.answer(
+            "🔌 <b>ProdSeller 商品映射</b>\n\n"
+            f"商品：{html.escape(product.name)}\n"
+            f"上游 ID：<code>{html.escape(mapping.external_product_id)}</code>\n"
+            f"上游成本：${mapping.cost_amount_minor / 100:.2f}\n"
+            f"建议售价：${suggested / 100:.2f}\n"
+            f"实际售价：{f'${actual / 100:.2f}' if actual is not None else '未配置'}\n"
+            f"单件毛利：{f'${profit / 100:.2f}' if profit is not None else '未知'}\n"
+            f"上游库存：{'有货' if mapping.in_stock else '缺货'}\n"
+            f"映射状态：{'暂停' if mapping.suspended_for_profit else '正常'}\n"
+            f"最近同步：{mapping.last_synced_at or '尚未同步'}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🔄 立即同步",
+                        callback_data=f"plugin:prodseller:syncmapping:{mapping.id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="⏯ 切换映射",
+                        callback_data=f"plugin:prodseller:togglemapping:{mapping.id}",
+                        style="danger",
+                    ),
+                ]]
+            ),
+        )
+
+    async def _sync_mapping(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            mapping_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        async with SessionFactory() as session:
+            mapping = await session.get(SupplierProduct, mapping_id)
+        if mapping is None or mapping.provider != PROVIDER:
+            await callback.answer("映射不存在", show_alert=True)
+            return
+        remote = await self.client.get_product(mapping.external_product_id)
+        _, suspended = await self._sync_existing([remote])
+        await callback.answer("同步完成", show_alert=True)
+        await callback.message.answer(
+            f"✅ 单商品同步完成；利润保护停用 {len(suspended)} 个。"
+        )
+
+    async def _toggle_mapping(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            mapping_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        async with SessionFactory() as session, session.begin():
+            mapping = await session.scalar(
+                select(SupplierProduct)
+                .where(SupplierProduct.id == mapping_id, SupplierProduct.provider == PROVIDER)
+                .with_for_update()
+            )
+            if mapping is None:
+                await callback.answer("映射不存在", show_alert=True)
+                return
+            mapping.suspended_for_profit = not mapping.suspended_for_profit
+            mapping.suspension_reason = (
+                "manually suspended by administrator"
+                if mapping.suspended_for_profit
+                else None
+            )
+            await record_admin_action(
+                session,
+                admin_telegram_id=callback.from_user.id,
+                action="supplier_mapping_toggle",
+                target_type="supplier_product",
+                target_id=str(mapping.id),
+                details={
+                    "provider": PROVIDER,
+                    "suspended": mapping.suspended_for_profit,
+                },
+            )
+            suspended = mapping.suspended_for_profit
+        await callback.answer("映射已暂停" if suspended else "映射已恢复", show_alert=True)
 
     async def _apply_suggested_price(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):

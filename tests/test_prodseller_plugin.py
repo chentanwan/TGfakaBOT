@@ -254,3 +254,14 @@ def test_supplier_health_panel_and_sync_audit_exist() -> None:
     assert 'action="supplier_manual_sync"' in source
     assert '"updated_mappings": updated' in source
     assert '"profit_suspended": len(suspended)' in source
+
+
+def test_admin_can_inspect_sync_and_suspend_supplier_mapping() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "plugin:prodseller:mapping:" in source
+    assert "plugin:prodseller:syncmapping:" in source
+    assert "plugin:prodseller:togglemapping:" in source
+    assert "单件毛利" in source
+    assert "最近同步" in source
+    assert 'action="supplier_mapping_toggle"' in source
+    assert "await self.client.get_product(mapping.external_product_id)" in source
