@@ -376,11 +376,13 @@ async def account_balance(callback: CallbackQuery) -> None:
         ),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=text(language, "topup"), callback_data="account:topup")],
                 [
                     InlineKeyboardButton(
+                        text=text(language, "topup"), callback_data="account:topup"
+                    ),
+                    InlineKeyboardButton(
                         text=text(language, "topup_history"), callback_data="account:topups"
-                    )
+                    ),
                 ],
                 [InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")],
             ]
@@ -513,12 +515,10 @@ async def account_support(callback: CallbackQuery) -> None:
                     InlineKeyboardButton(
                         text=f"👤 {settings.administrator_handle} ↗",
                         url=settings.administrator_url,
-                    )
-                ],
-                [
+                    ),
                     InlineKeyboardButton(
                         text=f"🆘 {settings.support_handle} ↗", url=settings.support_url
-                    )
+                    ),
                 ],
                 [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
             ]
@@ -952,8 +952,10 @@ async def callback_account(callback: CallbackQuery) -> None:
         f"Telegram ID: <code>{callback.from_user.id}</code>",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="📦 My orders", callback_data="my_orders")],
-                [InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")],
+                [
+                    InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
+                    InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+                ]
             ]
         ),
     )
@@ -1077,10 +1079,10 @@ async def order_detail(callback: CallbackQuery) -> None:
                 )
             ]
         )
-    rows.extend(
+    rows.append(
         [
-            [InlineKeyboardButton(text="📦 My orders", callback_data="my_orders")],
-            [InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")],
+            InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
+            InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
         ]
     )
     await callback.message.answer(

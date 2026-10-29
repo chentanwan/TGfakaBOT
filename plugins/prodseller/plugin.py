@@ -63,9 +63,7 @@ class ProdsellerPlugin:
         self.router = Router(name="plugin_prodseller")
         self.router.callback_query.register(self._balance, F.data == "plugin:prodseller:balance")
         self.router.callback_query.register(self._sync, F.data == "plugin:prodseller:sync")
-        self.router.callback_query.register(
-            self._health, F.data == "plugin:prodseller:health"
-        )
+        self.router.callback_query.register(self._health, F.data == "plugin:prodseller:health")
         self.router.callback_query.register(
             self._browse, F.data.startswith("plugin:prodseller:browse:")
         )
@@ -133,9 +131,7 @@ class ProdsellerPlugin:
                 InlineKeyboardButton(
                     text="🛍 ProdSeller 商品", callback_data="plugin:prodseller:browse:0"
                 ),
-                InlineKeyboardButton(
-                    text="🔄 同步上游", callback_data="plugin:prodseller:sync"
-                ),
+                InlineKeyboardButton(text="🔄 同步上游", callback_data="plugin:prodseller:sync"),
             ],
             [
                 InlineKeyboardButton(
@@ -289,11 +285,13 @@ class ProdsellerPlugin:
         async with SessionFactory() as session:
             pending = (
                 await session.scalars(
-                    select(SupplierOrder).where(
+                    select(SupplierOrder)
+                    .where(
                         SupplierOrder.provider == PROVIDER,
                         SupplierOrder.status.in_(["pending", "paid", "unknown"]),
                         SupplierOrder.external_order_id.is_not(None),
-                    ).limit(50)
+                    )
+                    .limit(50)
                 )
             ).all()
         for supplier_order in pending:
@@ -337,21 +335,21 @@ class ProdsellerPlugin:
                         f"卡密：<code>{html.escape(delivery.secret)}</code>",
                     )
             except (ProdsellerError, SupplierFulfillmentError):
-                logger.exception(
-                    "ProdSeller poll failed for supplier order %s", supplier_order.id
-                )
+                logger.exception("ProdSeller poll failed for supplier order %s", supplier_order.id)
 
     async def _reconcile_missing_external_ids(self) -> None:
         cutoff = datetime.now(UTC) - timedelta(hours=24)
         async with SessionFactory() as session:
             missing = (
                 await session.scalars(
-                    select(SupplierOrder).where(
+                    select(SupplierOrder)
+                    .where(
                         SupplierOrder.provider == PROVIDER,
                         SupplierOrder.status == "unknown",
                         SupplierOrder.external_order_id.is_(None),
                         SupplierOrder.created_at >= cutoff,
-                    ).limit(20)
+                    )
+                    .limit(20)
                 )
             ).all()
         if not missing or self._rate_limit_exhausted():
@@ -373,15 +371,22 @@ class ProdsellerPlugin:
             if len(candidates) != 1:
                 if len(candidates) > 1:
                     await self._save_result(
-                        context.order_id, None, "unknown", None, {},
+                        context.order_id,
+                        None,
+                        "unknown",
+                        None,
+                        {},
                         "上游订单对账发现多个候选，需管理员人工核验",
                     )
                 continue
             response = candidates[0]
             amount_minor = self._minor(response["amount"])
             await self._save_result(
-                context.order_id, response["orderId"], response["status"],
-                amount_minor, response,
+                context.order_id,
+                response["orderId"],
+                response["status"],
+                amount_minor,
+                response,
             )
             if response["status"] == "delivered":
                 await self._deliver_recovered_order(context.order_id, response)
@@ -492,9 +497,7 @@ class ProdsellerPlugin:
             product = next(item for item in products if item["id"] == external_id)
             if product["requiresEmailActivation"]:
                 raise ProdsellerError("该商品需要买家邮箱，当前版本暂不支持")
-            local_id = await self._import_product(
-                product, admin_telegram_id=callback.from_user.id
-            )
+            local_id = await self._import_product(product, admin_telegram_id=callback.from_user.id)
         except StopIteration:
             await callback.message.answer("❌ 上游商品不存在。")
             return
@@ -502,8 +505,7 @@ class ProdsellerPlugin:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return
         await callback.message.answer(
-            "✅ 商品已导入为草稿；建议售价默认关闭。\n"
-            f"本地商品 ID：<code>{local_id}</code>"
+            f"✅ 商品已导入为草稿；建议售价默认关闭。\n本地商品 ID：<code>{local_id}</code>"
         )
 
     async def _exceptions(self, callback: CallbackQuery) -> None:
@@ -565,7 +567,11 @@ class ProdsellerPlugin:
                     InlineKeyboardButton(
                         text=f"📋 详情 {item.public_id}",
                         callback_data=f"plugin:prodseller:audit:{item.id}",
-                    ),
+                    )
+                ]
+            )
+            rows.append(
+                [
                     InlineKeyboardButton(
                         text="🔎 查询恢复",
                         callback_data=f"plugin:prodseller:recover:{item.id}",
@@ -611,9 +617,7 @@ class ProdsellerPlugin:
             return
         await callback.answer()
         async with SessionFactory() as session:
-            summary = await get_supplier_order_summary(
-                session, supplier_order_id=supplier_order_id
-            )
+            summary = await get_supplier_order_summary(session, supplier_order_id=supplier_order_id)
             supplier_order = await session.get(SupplierOrder, supplier_order_id)
         if summary is None or supplier_order is None:
             await callback.message.answer("订单不存在。")
@@ -682,14 +686,16 @@ class ProdsellerPlugin:
                 f"数量 {order['quantity']} · ${order['amount']:.2f} · {created}"
             )
             rows.append(
-                [InlineKeyboardButton(
-                    text=f"选择 {order['orderId'][:12]}",
-                    callback_data=(
-                        f"plugin:prodseller:selectcandidate:{supplier_order_id}:"
-                        f"{order['orderId']}"
-                    ),
-                    style="danger",
-                )]
+                [
+                    InlineKeyboardButton(
+                        text=f"选择 {order['orderId'][:12]}",
+                        callback_data=(
+                            f"plugin:prodseller:selectcandidate:{supplier_order_id}:"
+                            f"{order['orderId']}"
+                        ),
+                        style="danger",
+                    )
+                ]
             )
         await callback.answer()
         await callback.message.answer(
@@ -703,7 +709,7 @@ class ProdsellerPlugin:
             return
         try:
             prefix = "plugin:prodseller:selectcandidate:"
-            supplier_raw, external_order_id = callback.data[len(prefix):].split(":", 1)
+            supplier_raw, external_order_id = callback.data[len(prefix) :].split(":", 1)
             supplier_order_id = uuid.UUID(supplier_raw)
         except (ValueError, IndexError):
             await callback.answer("参数错误", show_alert=True)
@@ -731,8 +737,11 @@ class ProdsellerPlugin:
             await callback.answer("该上游订单不再符合安全匹配条件", show_alert=True)
             return
         await self._save_result(
-            context.order_id, response["orderId"], response["status"],
-            self._minor(response["amount"]), response,
+            context.order_id,
+            response["orderId"],
+            response["status"],
+            self._minor(response["amount"]),
+            response,
         )
         if response["status"] == "delivered":
             await self._deliver_recovered_order(context.order_id, response)
@@ -835,8 +844,7 @@ class ProdsellerPlugin:
                     .join(SupplierProduct, SupplierProduct.sku_id == SKU.id)
                     .outerjoin(
                         ProductPrice,
-                        (ProductPrice.sku_id == SKU.id)
-                        & (ProductPrice.provider == "usdt"),
+                        (ProductPrice.sku_id == SKU.id) & (ProductPrice.provider == "usdt"),
                     )
                     .where(
                         Product.id == product_id,
@@ -867,22 +875,25 @@ class ProdsellerPlugin:
             f"路由优先级：{mapping.routing_priority}（数字越小越优先）\n"
             f"最近同步：{mapping.last_synced_at or '尚未同步'}",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text="🔄 立即同步",
-                        callback_data=f"plugin:prodseller:syncmapping:{mapping.id}",
-                    ),
-                    InlineKeyboardButton(
-                        text="⏯ 切换映射",
-                        callback_data=f"plugin:prodseller:togglemapping:{mapping.id}",
-                        style="danger",
-                    ),
-                ], [
-                    InlineKeyboardButton(
-                        text="🔢 设置路由优先级",
-                        callback_data=f"plugin:prodseller:priority:{mapping.id}",
-                    )
-                ]]
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🔄 立即同步",
+                            callback_data=f"plugin:prodseller:syncmapping:{mapping.id}",
+                        ),
+                        InlineKeyboardButton(
+                            text="⏯ 切换映射",
+                            callback_data=f"plugin:prodseller:togglemapping:{mapping.id}",
+                            style="danger",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="🔢 设置路由优先级",
+                            callback_data=f"plugin:prodseller:priority:{mapping.id}",
+                        )
+                    ],
+                ]
             ),
         )
 
@@ -903,9 +914,7 @@ class ProdsellerPlugin:
         remote = await self.client.get_product(mapping.external_product_id)
         _, suspended = await self._sync_existing([remote])
         await callback.answer("同步完成", show_alert=True)
-        await callback.message.answer(
-            f"✅ 单商品同步完成；利润保护停用 {len(suspended)} 个。"
-        )
+        await callback.message.answer(f"✅ 单商品同步完成；利润保护停用 {len(suspended)} 个。")
 
     async def _toggle_mapping(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
@@ -927,9 +936,7 @@ class ProdsellerPlugin:
                 return
             mapping.suspended_for_profit = not mapping.suspended_for_profit
             mapping.suspension_reason = (
-                "manually suspended by administrator"
-                if mapping.suspended_for_profit
-                else None
+                "manually suspended by administrator" if mapping.suspended_for_profit else None
             )
             await record_admin_action(
                 session,
@@ -945,9 +952,7 @@ class ProdsellerPlugin:
             suspended = mapping.suspended_for_profit
         await callback.answer("映射已暂停" if suspended else "映射已恢复", show_alert=True)
 
-    async def _start_routing_priority(
-        self, callback: CallbackQuery, state: FSMContext
-    ) -> None:
+    async def _start_routing_priority(self, callback: CallbackQuery, state: FSMContext) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
             return
@@ -1037,9 +1042,7 @@ class ProdsellerPlugin:
         await callback.answer("已应用建议售价")
         await callback.message.answer("✅ 已更新并启用 USDT 建议售价。")
 
-    async def _start_custom_price(
-        self, callback: CallbackQuery, state: FSMContext
-    ) -> None:
+    async def _start_custom_price(self, callback: CallbackQuery, state: FSMContext) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
             return
@@ -1200,9 +1203,7 @@ class ProdsellerPlugin:
         if product["requiresEmailActivation"]:
             await message.answer("❌ 该商品需要买家邮箱激活，当前版本暂不导入。")
             return
-        local_id = await self._import_product(
-            product, admin_telegram_id=message.from_user.id
-        )
+        local_id = await self._import_product(product, admin_telegram_id=message.from_user.id)
         await state.clear()
         await message.answer(
             "✅ 已导入上游商品。\n"
@@ -1325,9 +1326,7 @@ class ProdsellerPlugin:
                         f"sale {price.amount_minor} below required {required_sale}"
                     )
                     name = str(remote.get("name") or mapping.external_product_id)
-                    suspended.append(
-                        (mapping.id, name, price.amount_minor, required_sale)
-                    )
+                    suspended.append((mapping.id, name, price.amount_minor, required_sale))
                 elif price and price.amount_minor >= required_sale:
                     mapping.suspended_for_profit = False
                     mapping.suspension_reason = None
@@ -1398,10 +1397,7 @@ class ProdsellerPlugin:
 
     def _rate_limit_exhausted(self) -> bool:
         remaining = self.client.rate_limit.remaining
-        return (
-            remaining is not None
-            and remaining <= self.settings.prodseller_rate_limit_reserve
-        )
+        return remaining is not None and remaining <= self.settings.prodseller_rate_limit_reserve
 
     def _rate_limit_delay(self, default: int) -> int:
         retry_after = self.client.rate_limit.retry_after
@@ -1434,8 +1430,10 @@ class ProdsellerPlugin:
     @staticmethod
     def _delivered_secrets(order: dict) -> list[str]:
         values = order.get("deliveredKeys")
-        if isinstance(values, list) and values and all(
-            isinstance(item, str) and item for item in values
+        if (
+            isinstance(values, list)
+            and values
+            and all(isinstance(item, str) and item for item in values)
         ):
             return values
         raise SupplierFulfillmentError("上游 delivered 订单未包含卡密")

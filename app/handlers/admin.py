@@ -317,7 +317,7 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
         f"\nEVM 确认数：{settings.usdt_evm_confirmations}",
         f" · TRON 确认数：{settings.usdt_tron_confirmations}",
     ]
-    rows = []
+    method_buttons = []
     for method in methods:
         auto_verify = automatic_verification_available(settings, method.id)
         destination = (
@@ -333,14 +333,13 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
             f" · 排序：{method.sort_order}"
             f"\n收款信息：<code>{html.escape(destination)}</code>"
         )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{'✅' if method.enabled else '⛔'} {method.label}",
-                    callback_data=f"adm:pay:view:{method.id}",
-                )
-            ]
+        method_buttons.append(
+            InlineKeyboardButton(
+                text=f"{'✅' if method.enabled else '⛔'} {method.label}",
+                callback_data=f"adm:pay:view:{method.id}",
+            )
         )
+    rows = [method_buttons[index : index + 2] for index in range(0, len(method_buttons), 2)]
     rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
     await callback.message.answer(
         "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
@@ -368,20 +367,19 @@ async def payment_method_view(callback: CallbackQuery) -> None:
         ("最低金额", "minimum"),
         ("排序", "sort"),
     )
-    rows = [
-        [InlineKeyboardButton(text=f"✏️ {label}", callback_data=f"adm:pay:edit:{field}:{method.id}")]
+    field_buttons = [
+        InlineKeyboardButton(text=f"✏️ {label}", callback_data=f"adm:pay:edit:{field}:{method.id}")
         for label, field in fields
     ]
-    rows.extend(
+    rows = [field_buttons[:2], field_buttons[2:4], field_buttons[4:]]
+    rows.append(
         [
-            [
-                InlineKeyboardButton(
-                    text="⛔ 关闭" if method.enabled else "✅ 开启",
-                    callback_data=f"adm:pay:toggle:{method.id}",
-                    style="danger" if method.enabled else "success",
-                )
-            ],
-            [InlineKeyboardButton(text="« 支付设置", callback_data="adm:usdt:health")],
+            InlineKeyboardButton(
+                text="⛔ 关闭" if method.enabled else "✅ 开启",
+                callback_data=f"adm:pay:toggle:{method.id}",
+                style="danger" if method.enabled else "success",
+            ),
+            InlineKeyboardButton(text="« 支付设置", callback_data="adm:usdt:health"),
         ]
     )
     masked_destination = (
