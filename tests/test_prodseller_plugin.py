@@ -325,7 +325,7 @@ def test_supplier_management_is_grouped_under_one_admin_menu() -> None:
     admin = Path("app/handlers/admin.py").read_text()
     plugin = Path("plugins/prodseller/plugin.py").read_text()
     registry = Path("app/plugins/registry.py").read_text()
-    assert 'text="🏭 供应商管理"' in admin
+    assert 'text="🏭 供应商"' in admin
     assert 'F.data == "adm:suppliers"' in admin
     assert "supplier_plugins" in registry
     assert "def supplier_admin_buttons" in plugin
@@ -352,12 +352,12 @@ def test_usdt_methods_require_enablement_and_destination() -> None:
     source = Path("app/services/usdt_methods.py").read_text()
     for method in ("usdt_binance", "usdt_bep20", "usdt_trc20", "usdt_arbitrum"):
         assert method in source
-    assert "self.enabled and bool(self.destination.strip())" in source
+    assert "self.enabled and is_valid_destination(self.id, self.destination)" in source
 
 
 def test_topup_menu_uses_only_configured_usdt_methods() -> None:
     catalog = Path("app/handlers/catalog.py").read_text()
-    assert "available_usdt_methods(settings)" in catalog
+    assert "list_payment_methods(session, settings)" in catalog
     assert 'callback_data=f"topup:start:{method.id}"' in catalog
     assert "topup:start:cryptobot" not in catalog
     topups = Path("app/services/topups.py").read_text()
@@ -381,7 +381,7 @@ def test_direct_usdt_purchase_uses_neutral_price_and_manual_proof() -> None:
 def test_admin_reviews_manual_usdt_orders_safely() -> None:
     admin = Path("app/handlers/admin.py").read_text()
     payments = Path("app/services/plugin_payments.py").read_text()
-    assert 'text="₮ USDT 订单审核"' in admin
+    assert 'text="₮ USDT 审核"' in admin
     assert 'F.data == "adm:usdt:list"' in admin
     assert "approve_manual_usdt_payment" in admin
     assert "reject_manual_usdt_payment" in admin
