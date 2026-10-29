@@ -403,11 +403,11 @@ async def payment_method_toggle(callback: CallbackQuery) -> None:
             method = await toggle_payment_method(session, settings, method_id)
             await record_admin_action(
                 session,
-                callback.from_user.id,
-                "payment_method_toggle",
-                "payment_method",
-                method_id,
-                {"enabled": method.enabled},
+                admin_telegram_id=callback.from_user.id,
+                action="payment_method_toggle",
+                target_type="payment_method",
+                target_id=method_id,
+                details={"enabled": method.enabled},
             )
             await session.commit()
     except ValueError as exc:
@@ -464,11 +464,11 @@ async def payment_method_edit_value(message: Message, state: FSMContext) -> None
             method = await update_payment_method(session, settings, method_id, target, value)
             await record_admin_action(
                 session,
-                message.from_user.id,
-                "payment_method_edit",
-                "payment_method",
-                method_id,
-                {"field": target},
+                admin_telegram_id=message.from_user.id,
+                action="payment_method_edit",
+                target_type="payment_method",
+                target_id=method_id,
+                details={"field": target},
             )
             await session.commit()
     except (ValueError, TypeError) as exc:
