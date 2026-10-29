@@ -78,33 +78,32 @@ async def update_payment_method(
 ) -> UsdtMethod:
     if method_id not in _ALLOWED_IDS or field not in _EDITABLE_FIELDS:
         raise ValueError("不支持的支付设置")
-    async with session.begin():
-        row, payload = await _locked_payload(session, settings)
-        defaults = {method.id: method for method in configured_usdt_methods(settings)}
-        current = _deserialize(payload.get(method_id, {}), defaults[method_id])
-        data = _serialize(current)
-        if field == "destination":
-            candidate = str(value).strip()
-            if candidate and not is_valid_destination(method_id, candidate):
-                raise ValueError("收款信息格式无效")
-            data[field] = candidate
-        elif field == "minimum_topup_minor":
-            amount = int(value)
-            if amount < 10:
-                raise ValueError("最低充值金额不能低于 $0.10")
-            data[field] = amount
-        elif field == "sort_order":
-            data[field] = int(value)
-        else:
-            text = str(value).strip()
-            if not text:
-                raise ValueError("内容不能为空")
-            data[field] = text
-        payload[method_id] = data
-        row.value = payload
-        row.version += 1
-        await session.flush()
-        return _deserialize(data, defaults[method_id])
+    row, payload = await _locked_payload(session, settings)
+    defaults = {method.id: method for method in configured_usdt_methods(settings)}
+    current = _deserialize(payload.get(method_id, {}), defaults[method_id])
+    data = _serialize(current)
+    if field == "destination":
+        candidate = str(value).strip()
+        if candidate and not is_valid_destination(method_id, candidate):
+            raise ValueError("收款信息格式无效")
+        data[field] = candidate
+    elif field == "minimum_topup_minor":
+        amount = int(value)
+        if amount < 10:
+            raise ValueError("最低充值金额不能低于 $0.10")
+        data[field] = amount
+    elif field == "sort_order":
+        data[field] = int(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("内容不能为空")
+        data[field] = text
+    payload[method_id] = data
+    row.value = payload
+    row.version += 1
+    await session.flush()
+    return _deserialize(data, defaults[method_id])
 
 
 async def toggle_payment_method(
@@ -112,16 +111,15 @@ async def toggle_payment_method(
 ) -> UsdtMethod:
     if method_id not in _ALLOWED_IDS:
         raise ValueError("不支持的支付方式")
-    async with session.begin():
-        row, payload = await _locked_payload(session, settings)
-        defaults = {method.id: method for method in configured_usdt_methods(settings)}
-        current = _deserialize(payload.get(method_id, {}), defaults[method_id])
-        data = _serialize(current)
-        if not current.enabled and not is_valid_destination(method_id, current.destination):
-            raise ValueError("请先设置有效的收款信息")
-        data["enabled"] = not current.enabled
-        payload[method_id] = data
-        row.value = payload
-        row.version += 1
-        await session.flush()
-        return _deserialize(data, defaults[method_id])
+    row, payload = await _locked_payload(session, settings)
+    defaults = {method.id: method for method in configured_usdt_methods(settings)}
+    current = _deserialize(payload.get(method_id, {}), defaults[method_id])
+    data = _serialize(current)
+    if not current.enabled and not is_valid_destination(method_id, current.destination):
+        raise ValueError("请先设置有效的收款信息")
+    data["enabled"] = not current.enabled
+    payload[method_id] = data
+    row.value = payload
+    row.version += 1
+    await session.flush()
+    return _deserialize(data, defaults[method_id])
