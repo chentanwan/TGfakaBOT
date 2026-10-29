@@ -55,6 +55,10 @@ class AdminBroadcast(StatesGroup):
     confirmation = State()
 
 
+class PaymentMethodEdit(StatesGroup):
+    value = State()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in settings.admin_ids
 
@@ -116,9 +120,7 @@ async def admin_home_callback(callback: CallbackQuery, state: FSMContext) -> Non
         return
     await callback.answer()
     await state.clear()
-    await callback.message.answer(
-        "⚙️ <b>TGfakaBOT 管理后台</b>", reply_markup=admin_keyboard()
-    )
+    await callback.message.answer("⚙️ <b>TGfakaBOT 管理后台</b>", reply_markup=admin_keyboard())
 
 
 @router.callback_query(F.data == "adm:new")
@@ -288,41 +290,203 @@ async def product_toggle(callback: CallbackQuery) -> None:
     await callback.answer(f"已切换为 {status.value}", show_alert=True)
 
 
-
-
 @router.callback_query(F.data == "adm:usdt:health")
 async def usdt_payment_health(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
-    from app.services.usdt_methods import configured_usdt_methods, is_valid_destination
+    from app.services.payment_settings import list_payment_methods
     from app.services.usdt_verification import automatic_verification_available
 
     await callback.answer()
+    async with SessionFactory() as session:
+        methods = await list_payment_methods(session, settings)
     lines = [
         "⚙️ <b>支付设置</b>",
         f"\n自动核验总开关：{'开启' if settings.usdt_auto_verify_enabled else '关闭'}",
         f"\nEVM 确认数：{settings.usdt_evm_confirmations}",
         f" · TRON 确认数：{settings.usdt_tron_confirmations}",
     ]
-    for method in configured_usdt_methods(settings):
-        configured = bool(method.destination.strip())
-        valid = is_valid_destination(method.id, method.destination)
-        visible = method.available
+    rows = []
+    for method in methods:
         auto_verify = automatic_verification_available(settings, method.id)
-        endpoint_configured, contract_configured = _verification_configuration(method.id)
-        destination = _mask_payment_destination(method.destination) if configured else "未配置"
-        lines.append(
-            f"\n<b>{html.escape(method.label)}</b>"
-            f"\n启用：{'是' if method.enabled else '否'}"
-            f" · 格式：{'有效' if valid else '无效'}"
-            f" · 显示：{'是' if visible else '否'}"
-            f" · 自动核验：{'可用' if auto_verify else '不可用'}"
-            f"\n查询接口：{'已配置' if endpoint_configured else '未配置'}"
-            f" · 合约：{'已配置' if contract_configured else '未配置'}"
-            f"\n收款目标：<code>{html.escape(destination)}</code>"
+        destination = (
+            _mask_payment_destination(method.destination) if method.destination else "未配置"
         )
-    await callback.message.answer("".join(lines))
+        lines.append(
+            f"\n\n<b>{html.escape(method.label)}</b>"
+            f"\n状态：{'✅ 开启' if method.enabled else '⛔ 关闭'}"
+            f" · 显示：{'是' if method.available else '否'}"
+            f" · 自动核验：{'可用' if auto_verify else '不可用'}"
+            f"\n说明：{html.escape(method.description or '未设置')}"
+            f"\n最低充值：${method.minimum_topup_minor / 100:.2f}"
+            f" · 排序：{method.sort_order}"
+            f"\n收款信息：<code>{html.escape(destination)}</code>"
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅' if method.enabled else '⛔'} {method.label}",
+                    callback_data=f"adm:pay:view:{method.id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
+    await callback.message.answer(
+        "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+
+
+@router.callback_query(F.data.startswith("adm:pay:view:"))
+async def payment_method_view(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    from app.services.payment_settings import get_payment_method
+
+    method_id = callback.data.rsplit(":", 1)[1]
+    async with SessionFactory() as session:
+        method = await get_payment_method(session, settings, method_id)
+    if method is None:
+        await callback.answer("支付方式不存在", show_alert=True)
+        return
+    await callback.answer()
+    fields = (
+        ("名称", "label"),
+        ("说明", "description"),
+        ("收款信息", "destination"),
+        ("最低金额", "minimum"),
+        ("排序", "sort"),
+    )
+    rows = [
+        [InlineKeyboardButton(text=f"✏️ {label}", callback_data=f"adm:pay:edit:{field}:{method.id}")]
+        for label, field in fields
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="⛔ 关闭" if method.enabled else "✅ 开启",
+                    callback_data=f"adm:pay:toggle:{method.id}",
+                    style="danger" if method.enabled else "success",
+                )
+            ],
+            [InlineKeyboardButton(text="« 支付设置", callback_data="adm:usdt:health")],
+        ]
+    )
+    masked_destination = (
+        html.escape(_mask_payment_destination(method.destination))
+        if method.destination
+        else "未设置"
+    )
+    await callback.message.answer(
+        f"<b>{html.escape(method.label)}</b>\n"
+        f"状态：{'开启' if method.enabled else '关闭'}\n"
+        f"说明：{html.escape(method.description or '未设置')}\n"
+        f"收款信息：<code>{masked_destination}</code>\n"
+        f"最低充值：${method.minimum_topup_minor / 100:.2f}\n"
+        f"排序：{method.sort_order}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:pay:toggle:"))
+async def payment_method_toggle(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    from app.services.payment_settings import toggle_payment_method
+
+    method_id = callback.data.rsplit(":", 1)[1]
+    try:
+        async with SessionFactory() as session:
+            method = await toggle_payment_method(session, settings, method_id)
+            await record_admin_action(
+                session,
+                callback.from_user.id,
+                "payment_method_toggle",
+                "payment_method",
+                method_id,
+                {"enabled": method.enabled},
+            )
+            await session.commit()
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("已开启" if method.enabled else "已关闭", show_alert=True)
+    await payment_method_view(callback)
+
+
+@router.callback_query(F.data.startswith("adm:pay:edit:"))
+async def payment_method_edit_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    try:
+        _, _, _, field, method_id = callback.data.split(":", 4)
+    except ValueError:
+        await callback.answer("无效请求", show_alert=True)
+        return
+    prompts = {
+        "label": "请输入新的支付方式名称：",
+        "description": "请输入新的用户说明：",
+        "destination": "请输入新的收款 UID 或地址：",
+        "minimum": "请输入最低充值金额（USD，例如 1.50）：",
+        "sort": "请输入排序数字（越小越靠前）：",
+    }
+    if field not in prompts:
+        await callback.answer("不支持的字段", show_alert=True)
+        return
+    await callback.answer()
+    await state.update_data(payment_method_id=method_id, payment_field=field)
+    await state.set_state(PaymentMethodEdit.value)
+    await callback.message.answer(prompts[field])
+
+
+@router.message(PaymentMethodEdit.value)
+async def payment_method_edit_value(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+    from app.services.payment_settings import update_payment_method
+
+    data = await state.get_data()
+    method_id = str(data.get("payment_method_id") or "")
+    field = str(data.get("payment_field") or "")
+    raw = (message.text or "").strip()
+    field_map = {"minimum": "minimum_topup_minor", "sort": "sort_order"}
+    target = field_map.get(field, field)
+    try:
+        value = (
+            round(float(raw) * 100) if field == "minimum" else int(raw) if field == "sort" else raw
+        )
+        async with SessionFactory() as session:
+            method = await update_payment_method(session, settings, method_id, target, value)
+            await record_admin_action(
+                session,
+                message.from_user.id,
+                "payment_method_edit",
+                "payment_method",
+                method_id,
+                {"field": target},
+            )
+            await session.commit()
+    except (ValueError, TypeError) as exc:
+        await message.answer(f"❌ {html.escape(str(exc) or '输入格式无效')}，请重新输入：")
+        return
+    await state.clear()
+    await message.answer(
+        f"✅ 已更新 {html.escape(method.label)}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="返回支付方式", callback_data=f"adm:pay:view:{method.id}"
+                    )
+                ]
+            ]
+        ),
+    )
 
 
 def _verification_configuration(method_id: str) -> tuple[bool, bool]:
@@ -366,18 +530,22 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
             f"金额：${record.amount_minor / 100:.2f}\n"
             f"凭证：<code>{html.escape(record.proof)}</code>\n"
             f"状态：{'⚠️ 已超过 24 小时' if record.overdue else '待审核'}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="✅ 确认到账",
-                    callback_data=f"adm:usdt:ask:a:{record.payment_id}",
-                    style="success",
-                ),
-                InlineKeyboardButton(
-                    text="❌ 拒绝",
-                    callback_data=f"adm:usdt:ask:r:{record.payment_id}",
-                    style="danger",
-                ),
-            ]]),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ 确认到账",
+                            callback_data=f"adm:usdt:ask:a:{record.payment_id}",
+                            style="success",
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ 拒绝",
+                            callback_data=f"adm:usdt:ask:r:{record.payment_id}",
+                            style="danger",
+                        ),
+                    ]
+                ]
+            ),
         )
 
 
@@ -397,10 +565,12 @@ async def ask_usdt_review(callback: CallbackQuery) -> None:
     from redis.asyncio import Redis
 
     from app.services.admin_confirmations import create_confirmation
+
     redis = Redis.from_url(settings.redis_url)
     try:
         token = await create_confirmation(
-            redis, admin_id=callback.from_user.id,
+            redis,
+            admin_id=callback.from_user.id,
             action="usdt_approve" if action == "a" else "usdt_reject",
             order_id=payment_id,
         )
@@ -410,13 +580,17 @@ async def ask_usdt_review(callback: CallbackQuery) -> None:
     await callback.answer()
     await callback.message.answer(
         f"⚠️ <b>{label}</b>\n\n确认令牌 5 分钟内有效且只能使用一次。",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"adm:usdt:do:{action}:{payment_id}:{token}",
-                style="success" if action == "a" else "danger",
-            )
-        ]]),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=label,
+                        callback_data=f"adm:usdt:do:{action}:{payment_id}:{token}",
+                        style="success" if action == "a" else "danger",
+                    )
+                ]
+            ]
+        ),
     )
 
 
@@ -436,11 +610,15 @@ async def approve_usdt_order(callback: CallbackQuery) -> None:
         from redis.asyncio import Redis
 
         from app.services.admin_confirmations import consume_confirmation
+
         redis = Redis.from_url(settings.redis_url)
         try:
             confirmed = await consume_confirmation(
-                redis, token=token, admin_id=callback.from_user.id,
-                action="usdt_approve", order_id=payment_id,
+                redis,
+                token=token,
+                admin_id=callback.from_user.id,
+                action="usdt_approve",
+                order_id=payment_id,
             )
         finally:
             await redis.aclose()
@@ -449,7 +627,8 @@ async def approve_usdt_order(callback: CallbackQuery) -> None:
             return
         async with SessionFactory() as session:
             delivery, duplicate = await approve_manual_usdt_payment(
-                session, payment_id=payment_id,
+                session,
+                payment_id=payment_id,
                 admin_telegram_id=callback.from_user.id,
             )
     except (ValueError, PluginPaymentError) as exc:
@@ -492,11 +671,15 @@ async def reject_usdt_order(callback: CallbackQuery) -> None:
         from redis.asyncio import Redis
 
         from app.services.admin_confirmations import consume_confirmation
+
         redis = Redis.from_url(settings.redis_url)
         try:
             confirmed = await consume_confirmation(
-                redis, token=token, admin_id=callback.from_user.id,
-                action="usdt_reject", order_id=payment_id,
+                redis,
+                token=token,
+                admin_id=callback.from_user.id,
+                action="usdt_reject",
+                order_id=payment_id,
             )
         finally:
             await redis.aclose()
@@ -505,7 +688,8 @@ async def reject_usdt_order(callback: CallbackQuery) -> None:
             return
         async with SessionFactory() as session:
             telegram_user_id, public_id, duplicate = await reject_manual_usdt_payment(
-                session, payment_id=payment_id,
+                session,
+                payment_id=payment_id,
                 admin_telegram_id=callback.from_user.id,
             )
     except (ValueError, PluginPaymentError) as exc:

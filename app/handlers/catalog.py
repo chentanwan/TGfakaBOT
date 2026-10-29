@@ -41,8 +41,8 @@ from app.services.orders import (
     submit_payment_receipt,
     validate_pre_checkout,
 )
+from app.services.payment_settings import get_payment_method, list_payment_methods
 from app.services.topups import list_user_topups, submit_topup
-from app.services.usdt_methods import available_usdt_methods, get_usdt_method
 
 router = Router(name="catalog")
 settings = get_settings()
@@ -530,13 +530,12 @@ async def account_support(callback: CallbackQuery) -> None:
 async def account_topup(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.clear()
-    methods = available_usdt_methods(settings)
+    async with SessionFactory() as session:
+        methods = tuple(
+            method for method in await list_payment_methods(session, settings) if method.available
+        )
     rows = [
-        [
-            InlineKeyboardButton(
-                text=method.label, callback_data=f"topup:start:{method.id}"
-            )
-        ]
+        [InlineKeyboardButton(text=method.label, callback_data=f"topup:start:{method.id}")]
         for method in methods
     ]
     rows.append([InlineKeyboardButton(text="« Back", callback_data="shop:home")])
@@ -545,15 +544,14 @@ async def account_topup(callback: CallbackQuery, state: FSMContext) -> None:
         if methods
         else "💳 <b>Top-up methods</b>\nNo USDT payment method is currently enabled."
     )
-    await callback.message.answer(
-        message, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
-    )
+    await callback.message.answer(message, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @router.callback_query(F.data.startswith("topup:start:"))
 async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None:
     method_id = callback.data.rsplit(":", 1)[1]
-    method = get_usdt_method(settings, method_id)
+    async with SessionFactory() as session:
+        method = await get_payment_method(session, settings, method_id)
     if method is None or not method.available:
         await callback.answer("This payment method is unavailable.", show_alert=True)
         return
@@ -568,14 +566,16 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
         f"💳 <b>{html.escape(method.label)}</b>\n"
         f"Send USDT to: <code>{html.escape(method.destination)}</code>.\n"
         f"Then submit the {html.escape(method.proof_label)}.\n\n"
-        f"💵 Minimum: ${settings.minimum_topup_minor / 100:.2f}\n"
+        f"💵 Minimum: ${method.minimum_topup_minor / 100:.2f}\n"
         "How much did you send? Enter the USD amount:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="✖ Cancel", callback_data="topup:cancel", style="danger"
-                )
-            ]]
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✖ Cancel", callback_data="topup:cancel", style="danger"
+                    )
+                ]
+            ]
         ),
     )
 
@@ -589,18 +589,20 @@ async def cancel_topup(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(ManualTopup.amount)
 async def manual_topup_amount(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    method_id = str(data.get("topup_method") or "")
+    async with SessionFactory() as session:
+        method = await get_payment_method(session, settings, method_id)
+    minimum_topup_minor = method.minimum_topup_minor if method else settings.minimum_topup_minor
     try:
         amount_minor = round(float((message.text or "").strip()) * 100)
-        if amount_minor < settings.minimum_topup_minor:
+        if amount_minor < minimum_topup_minor:
             raise ValueError
     except ValueError:
-        await message.answer(
-            f"Enter a valid amount of at least ${settings.minimum_topup_minor / 100:.2f}."
-        )
+        await message.answer(f"Enter a valid amount of at least ${minimum_topup_minor / 100:.2f}.")
         return
     await state.update_data(topup_amount_minor=amount_minor)
     await state.set_state(ManualTopup.proof)
-    data = await state.get_data()
     proof_label = data.get("topup_proof_label", "transaction hash")
     await message.answer(f"Send the {html.escape(str(proof_label))}:")
 
@@ -622,6 +624,7 @@ async def manual_topup_proof(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     from app.services.usdt_auto import verify_topup
+
     outcome = await verify_topup(record.id)
     status_text = (
         "✅ Payment automatically verified and balance credited."
@@ -717,7 +720,8 @@ async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
     except (ValueError, IndexError):
         await callback.answer("Invalid payment request.", show_alert=True)
         return
-    method = get_usdt_method(settings, method_id)
+    async with SessionFactory() as session:
+        method = await get_payment_method(session, settings, method_id)
     if method is None or not method.available:
         await callback.answer("This payment method is unavailable.", show_alert=True)
         return
@@ -735,31 +739,29 @@ async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
         f"Price: ${amount_minor / 100:.2f} USDT\n"
         f"Payment: {html.escape(method.label)}",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="✅ Create payment order",
-                    callback_data=f"usdt:create:{method.id}:{product.id}",
-                )
-            ], [
-                InlineKeyboardButton(
-                    text="⬅️ Back", callback_data=f"shop:product:{product.id}"
-                )
-            ]]
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Create payment order",
+                        callback_data=f"usdt:create:{method.id}:{product.id}",
+                    )
+                ],
+                [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:product:{product.id}")],
+            ]
         ),
     )
 
 
 @router.callback_query(F.data.startswith("usdt:create:"))
-async def create_usdt_purchase(
-    callback: CallbackQuery, state: FSMContext
-) -> None:
+async def create_usdt_purchase(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         _, _, method_id, raw_product_id = callback.data.split(":", 3)
         product_id = uuid.UUID(raw_product_id)
     except (ValueError, IndexError):
         await callback.answer("Invalid payment request.", show_alert=True)
         return
-    method = get_usdt_method(settings, method_id)
+    async with SessionFactory() as session:
+        method = await get_payment_method(session, settings, method_id)
     if method is None or not method.available:
         await callback.answer("This payment method is unavailable.", show_alert=True)
         return
@@ -834,6 +836,7 @@ async def submit_usdt_purchase_proof(message: Message, state: FSMContext) -> Non
         return
     await state.clear()
     from app.services.usdt_auto import _notify_delivery, verify_order
+
     outcome = await verify_order(payment_id)
     await _notify_delivery(message.bot, outcome)
     if outcome.state == "paid":
@@ -900,7 +903,11 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
         )
     if available and "usdt" in product.plugin_prices:
         _, usdt_amount = product.plugin_prices["usdt"]
-        for method in available_usdt_methods(settings):
+        async with SessionFactory() as session:
+            payment_methods = await list_payment_methods(session, settings)
+        for method in payment_methods:
+            if not method.available:
+                continue
             rows.append(
                 [
                     InlineKeyboardButton(

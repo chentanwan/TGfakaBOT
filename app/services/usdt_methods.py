@@ -21,6 +21,9 @@ class UsdtMethod:
     proof_label: str
     destination: str
     enabled: bool
+    description: str = ""
+    minimum_topup_minor: int = 10
+    sort_order: int = 0
 
     @property
     def available(self) -> bool:
@@ -63,6 +66,9 @@ def configured_usdt_methods(settings: Settings) -> tuple[UsdtMethod, ...]:
             "Binance Pay 订单号",
             settings.binance_pay_uid,
             settings.binance_pay_enabled,
+            "使用 Binance Pay UID 付款",
+            settings.minimum_topup_minor,
+            10,
         ),
         UsdtMethod(
             "usdt_bep20",
@@ -70,6 +76,9 @@ def configured_usdt_methods(settings: Settings) -> tuple[UsdtMethod, ...]:
             "交易哈希",
             settings.usdt_bep20_address,
             settings.usdt_bep20_enabled,
+            "通过 BSC 网络发送 USDT",
+            settings.minimum_topup_minor,
+            20,
         ),
         UsdtMethod(
             "usdt_trc20",
@@ -77,6 +86,9 @@ def configured_usdt_methods(settings: Settings) -> tuple[UsdtMethod, ...]:
             "交易哈希",
             settings.usdt_trc20_address,
             settings.usdt_trc20_enabled,
+            "通过 TRON 网络发送 USDT",
+            settings.minimum_topup_minor,
+            30,
         ),
         UsdtMethod(
             "usdt_arbitrum",
@@ -84,6 +96,9 @@ def configured_usdt_methods(settings: Settings) -> tuple[UsdtMethod, ...]:
             "交易哈希",
             settings.usdt_arbitrum_address,
             settings.usdt_arbitrum_enabled,
+            "通过 Arbitrum 网络发送 USDT",
+            settings.minimum_topup_minor,
+            40,
         ),
     )
 

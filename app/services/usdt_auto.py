@@ -53,7 +53,11 @@ async def verify_topup(topup_id) -> AutoVerificationOutcome:
         method, proof, amount = topup.method, topup.proof, topup.amount_minor
     if not automatic_verification_available(settings, method):
         return AutoVerificationOutcome("unsupported", reason="未配置自动核验接口")
-    destination = _destination(settings, method)
+    from app.services.payment_settings import get_payment_method
+
+    async with SessionFactory() as session:
+        configured_method = await get_payment_method(session, settings, method)
+    destination = configured_method.destination if configured_method else ""
     result = await verify_usdt_payment(
         settings,
         method_id=method,
@@ -150,15 +154,6 @@ async def verify_order(payment_id) -> AutoVerificationOutcome:
             provider_data={"automatically_verified": True, "confirmations": result.confirmations},
         )
     return AutoVerificationOutcome("paid", delivery=delivery, reference=public_id)
-
-
-def _destination(settings, method: str) -> str:
-    return {
-        "usdt_bep20": settings.usdt_bep20_address,
-        "usdt_trc20": settings.usdt_trc20_address,
-        "usdt_arbitrum": settings.usdt_arbitrum_address,
-        "usdt_binance": settings.binance_pay_uid,
-    }[method]
 
 
 async def _notify_delivery(bot: Bot, outcome: AutoVerificationOutcome) -> None:
