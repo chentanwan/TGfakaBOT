@@ -8,7 +8,7 @@ from app.plugins.base import Plugin
 class PluginRegistry:
     def __init__(self, module_names: tuple[str, ...]) -> None:
         self._plugins: list[Plugin] = []
-        builtins = ("plugins.admin_manager",)
+        builtins = ("plugins.admin_manager", "plugins.price_manager")
         configured = builtins + tuple(name for name in module_names if name not in builtins)
         for module_name in configured:
             module = import_module(module_name)

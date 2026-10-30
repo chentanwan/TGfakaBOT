@@ -68,7 +68,7 @@ def _home_keyboard(language: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=text(language, "products"),
-                    callback_data="shop:categories",
+                    callback_data="shop:category:all",
                     style="success",
                 ),
                 InlineKeyboardButton(
@@ -179,7 +179,7 @@ async def show_help_command(message: Message) -> None:
 
 @router.message(Command("shop"))
 async def show_shop_command(message: Message) -> None:
-    await send_categories(message, message.from_user.id)
+    await send_products(message, message.from_user.id, category_id=None)
 
 
 @router.callback_query(F.data.startswith("balance:variant:"))
@@ -690,38 +690,50 @@ async def callback_category(callback: CallbackQuery) -> None:
     except (ValueError, IndexError):
         await callback.message.answer("Invalid category.")
         return
+    await send_products(callback.message, callback.from_user.id, category_id=category_id)
+
+
+async def send_products(
+    target: Message, telegram_user_id: int, *, category_id: uuid.UUID | None
+) -> None:
     async with SessionFactory() as session:
         products = await list_products(session)
-    products = [product for product in products if product.category_id == category_id]
+    if category_id is not None:
+        products = [product for product in products if product.category_id == category_id]
+    language = await _user_language(telegram_user_id)
     if not products:
-        await callback.message.answer(
-            "No products in this category.",
+        await target.answer(
+            "No products are available in this selection.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="« Categories", callback_data="shop:categories")]
+                    [InlineKeyboardButton(text="« Categories", callback_data="shop:categories")],
+                    [InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")],
                 ]
             ),
         )
         return
     rows = []
-    language = await _user_language(callback.from_user.id)
     for product in products:
         available = product.stock > 0 or product.supplier_stock
         stock_text = text(language, "in_stock") if available else text(language, "out_of_stock")
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=(f"{product.name} · {_product_price(product)} · {stock_text}"),
+                    text=f"{product.name} · {_product_price(product)} · {stock_text}",
                     callback_data=f"shop:product:{product.id}",
                     style="success" if available else "danger",
                 )
             ]
         )
     rows.append(
-        [InlineKeyboardButton(text=text(language, "back"), callback_data="shop:categories")]
+        [
+            InlineKeyboardButton(text="📁 Categories", callback_data="shop:categories"),
+            InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+        ]
     )
-    await callback.message.answer(
-        f"📦 <b>{html.escape(products[0].category_name or text(language, 'products'))}</b>\n"
+    title = products[0].category_name if category_id is not None else text(language, "products")
+    await target.answer(
+        f"📦 <b>{html.escape(title or text(language, 'products'))}</b>\n"
         f"{len(products)} · {text(language, 'choose_product')}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )

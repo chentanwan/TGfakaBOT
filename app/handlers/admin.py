@@ -66,7 +66,6 @@ def _back_markup(callback_data: str, label: str = "« 返回") -> InlineKeyboard
     )
 
 
-
 def admin_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [
@@ -75,8 +74,9 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🏭 供应商", callback_data="adm:suppliers"),
-            InlineKeyboardButton(text="⚙️ 支付设置", callback_data="adm:usdt:health"),
+            InlineKeyboardButton(text="💰 价格设置", callback_data="plugin:prices:list"),
         ],
+        [InlineKeyboardButton(text="⚙️ 支付设置", callback_data="adm:usdt:health")],
         [
             InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list"),
             InlineKeyboardButton(text="₮ USDT 审核", callback_data="adm:usdt:list"),
