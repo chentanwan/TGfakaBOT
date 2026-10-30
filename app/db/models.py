@@ -64,6 +64,15 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[UserStatus] = enum_column(UserStatus, "user_status", UserStatus.ACTIVE)
 
 
+class BotAdministrator(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "bot_administrators"
+
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(64))
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    added_by_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class Category(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "categories"
 
@@ -242,9 +251,7 @@ class PluginPayment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "plugin_payments"
     __table_args__ = (
         CheckConstraint("amount_minor >= 1", name="positive_amount_minor"),
-        UniqueConstraint(
-            "provider", "external_id", name="uq_plugin_payments_provider_external_id"
-        ),
+        UniqueConstraint("provider", "external_id", name="uq_plugin_payments_provider_external_id"),
         UniqueConstraint(
             "provider", "transaction_id", name="uq_plugin_payments_provider_transaction_id"
         ),

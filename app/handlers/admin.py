@@ -21,6 +21,7 @@ from app.services.admin import (
     list_broadcast_user_ids,
     toggle_product,
 )
+from app.services.admin_access import is_admin
 from app.services.audit import record_admin_action
 from app.services.topups import list_pending_topups, review_topup
 
@@ -65,9 +66,6 @@ def _back_markup(callback_data: str, label: str = "« 返回") -> InlineKeyboard
     )
 
 
-def is_admin(user_id: int) -> bool:
-    return user_id in settings.admin_ids
-
 
 def admin_keyboard() -> InlineKeyboardMarkup:
     rows = [
@@ -91,7 +89,10 @@ def admin_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⚠️ 支付异常", callback_data="adm:pex:list"),
             InlineKeyboardButton(text="⏳ 退款处理", callback_data="adm:refunds:pending"),
         ],
-        [InlineKeyboardButton(text="🧾 孤立支付流水", callback_data="adm:charges:list")],
+        [
+            InlineKeyboardButton(text="🧾 孤立支付流水", callback_data="adm:charges:list"),
+            InlineKeyboardButton(text="🛡 管理员管理", callback_data="plugin:adminmgr:list"),
+        ],
     ]
     for plugin in get_plugin_registry().plugins:
         rows.extend(plugin.admin_home_buttons())

@@ -12,6 +12,8 @@ from app.core.config import get_settings
 from app.handlers import admin, catalog, charge_admin, payment_admin
 from app.plugins import configure_plugins
 from app.plugins.http import start_plugin_http_server
+from app.services.admin_access import refresh_admin_cache
+from app.services.bot_status import heartbeat_loop, notify_online, notify_stopping
 from app.services.cleanup import cleanup_loop
 from app.services.usdt_auto import usdt_verification_loop
 
@@ -42,17 +44,24 @@ async def main() -> None:
     )
     # Never drop queued updates: a pending successful_payment is a financial event.
     await bot.delete_webhook(drop_pending_updates=False)
+    await refresh_admin_cache()
     plugin_http_runner = await start_plugin_http_server(bot, plugin_registry)
     for plugin in plugin_registry.plugins:
         await plugin.startup(bot)
+    heartbeat_task = asyncio.create_task(heartbeat_loop(redis))
     cleanup_task = asyncio.create_task(cleanup_loop(bot))
     verification_task = asyncio.create_task(usdt_verification_loop(bot))
+    await notify_online(bot, redis)
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
+        await notify_stopping(bot, redis)
+        heartbeat_task.cancel()
         cleanup_task.cancel()
         verification_task.cancel()
-        await asyncio.gather(cleanup_task, verification_task, return_exceptions=True)
+        await asyncio.gather(
+            heartbeat_task, cleanup_task, verification_task, return_exceptions=True
+        )
         for plugin in reversed(plugin_registry.plugins):
             await plugin.shutdown()
         if plugin_http_runner is not None:

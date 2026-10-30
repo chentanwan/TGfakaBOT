@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory
+from app.services.admin_access import is_admin
 from app.services.admin_confirmations import consume_confirmation, create_confirmation
 from app.services.charge_exceptions import (
     ChargeExceptionError,
@@ -26,9 +27,6 @@ class ReconcileCharge(StatesGroup):
     evidence = State()
 
 
-def _is_admin(user_id: int) -> bool:
-    return user_id in settings.admin_ids
-
 
 def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -38,7 +36,7 @@ def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "adm:charges:list")
 async def orphan_charge_list(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     await callback.answer()
@@ -90,7 +88,7 @@ async def orphan_charge_list(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adm:charge:ask:"))
 async def ask_orphan_refund(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
@@ -124,7 +122,7 @@ async def ask_orphan_refund(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adm:charge:do:"))
 async def execute_orphan_refund(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
@@ -190,7 +188,7 @@ async def execute_orphan_refund(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adm:charge:reconcile:"))
 async def start_reconcile(callback: CallbackQuery, state: FSMContext) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
@@ -211,7 +209,7 @@ async def start_reconcile(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(ReconcileCharge.evidence)
 async def finish_reconcile(message: Message, state: FSMContext) -> None:
-    if not _is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id):
         return
     evidence = (message.text or "").strip()
     if len(evidence) < 6:

@@ -23,6 +23,23 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  status-watchdog:
+    build: .
+    image: tgfakabot:latest
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && python -m app.status_watchdog"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped

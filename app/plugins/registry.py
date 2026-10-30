@@ -8,7 +8,9 @@ from app.plugins.base import Plugin
 class PluginRegistry:
     def __init__(self, module_names: tuple[str, ...]) -> None:
         self._plugins: list[Plugin] = []
-        for module_name in module_names:
+        builtins = ("plugins.admin_manager",)
+        configured = builtins + tuple(name for name in module_names if name not in builtins)
+        for module_name in configured:
             module = import_module(module_name)
             factory = getattr(module, "create_plugin", None)
             if not callable(factory):
@@ -25,17 +27,13 @@ class PluginRegistry:
     @property
     def supplier_plugins(self) -> tuple[Plugin, ...]:
         return tuple(
-            plugin
-            for plugin in self._plugins
-            if getattr(plugin, "supplier_provider", False)
+            plugin for plugin in self._plugins if getattr(plugin, "supplier_provider", False)
         )
 
     @property
     def supplier_providers(self) -> frozenset[str]:
         return frozenset(
-            plugin.name
-            for plugin in self._plugins
-            if getattr(plugin, "supplier_provider", False)
+            plugin.name for plugin in self._plugins if getattr(plugin, "supplier_provider", False)
         )
 
 

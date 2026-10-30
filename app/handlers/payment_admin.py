@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory
+from app.services.admin_access import is_admin
 from app.services.admin_confirmations import consume_confirmation, create_confirmation
 from app.services.payment_exceptions import (
     PaymentExceptionError,
@@ -29,9 +30,6 @@ class ReconcileLinkedRefund(StatesGroup):
     evidence = State()
 
 
-def _is_admin(user_id: int) -> bool:
-    return user_id in settings.admin_ids
-
 
 def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -41,7 +39,7 @@ def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "adm:pex:list")
 async def payment_exception_list(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     await callback.answer()
@@ -79,7 +77,7 @@ async def payment_exception_list(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "adm:refunds:pending")
 async def refund_pending_list(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     await callback.answer()
@@ -120,7 +118,7 @@ async def refund_pending_list(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adm:pex:ask:"))
 async def ask_action(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
@@ -156,7 +154,7 @@ async def ask_action(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "adm:pex:cancel")
 async def cancel_action(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         return
     await callback.answer("已取消")
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -164,7 +162,7 @@ async def cancel_action(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adm:pex:do:"))
 async def confirm_action(callback: CallbackQuery) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
@@ -278,7 +276,7 @@ async def _execute_refund(callback: CallbackQuery, order_id: uuid.UUID) -> None:
 
 @router.callback_query(F.data.startswith("adm:linked:reconcile:"))
 async def start_linked_reconcile(callback: CallbackQuery, state: FSMContext) -> None:
-    if not _is_admin(callback.from_user.id):
+    if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
@@ -299,7 +297,7 @@ async def start_linked_reconcile(callback: CallbackQuery, state: FSMContext) -> 
 
 @router.message(ReconcileLinkedRefund.evidence)
 async def finish_linked_reconcile(message: Message, state: FSMContext) -> None:
-    if not _is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id):
         return
     evidence = (message.text or "").strip()
     if len(evidence) < 6:

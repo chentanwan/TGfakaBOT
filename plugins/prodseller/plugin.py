@@ -16,6 +16,7 @@ from app.db.base import ProductStatus
 from app.db.models import SKU, Product, ProductPrice, SupplierOrder, SupplierProduct
 from app.db.session import SessionFactory
 from app.plugins.base import PluginProduct
+from app.services.admin_access import all_admin_ids, is_admin
 from app.services.audit import record_admin_action
 from app.services.supplier_fulfillment import (
     SupplierFulfillmentError,
@@ -1536,7 +1537,6 @@ class ProdsellerPlugin:
         if not suspended or self._bot is None:
             return
 
-        from app.core.config import get_settings
 
         for mapping_id, name, old_price, suggested in suspended:
             text = (
@@ -1559,7 +1559,7 @@ class ProdsellerPlugin:
                     ]
                 ]
             )
-            for admin_id in get_settings().admin_ids:
+            for admin_id in all_admin_ids():
                 try:
                     await self._bot.send_message(admin_id, text, reply_markup=keyboard)
                 except Exception:
@@ -1636,9 +1636,8 @@ class ProdsellerPlugin:
 
     @staticmethod
     def _is_admin(user_id: int) -> bool:
-        from app.core.config import get_settings
 
-        return user_id in get_settings().admin_ids
+        return is_admin(user_id)
 
 
 def create_plugin() -> ProdsellerPlugin:
