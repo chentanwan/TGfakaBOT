@@ -903,6 +903,11 @@ class ProdsellerPlugin:
         suggested = self._sale_price(mapping.cost_amount_minor)
         actual = price.amount_minor if price else None
         profit = actual - mapping.cost_amount_minor if actual is not None else None
+        pricing_mode = (price.metadata_json or {}).get("pricing") if price else None
+        pricing_label = {
+            "auto_markup": "自动跟价",
+            "manual_protected": "手动定价（利润保护）",
+        }.get(pricing_mode, "未指定")
 
         await callback.answer()
         await callback.message.answer(
@@ -913,6 +918,7 @@ class ProdsellerPlugin:
             f"建议售价：${suggested / 100:.2f}\n"
             f"实际售价：{f'${actual / 100:.2f}' if actual is not None else '未配置'}\n"
             f"单件毛利：{f'${profit / 100:.2f}' if profit is not None else '未知'}\n"
+            f"定价模式：{pricing_label}\n"
             f"上游库存：{'有货' if mapping.in_stock else '缺货'}\n"
             f"映射状态：{'暂停' if mapping.suspended_for_profit else '正常'}\n"
             f"路由优先级：{mapping.routing_priority}（数字越小越优先）\n"
@@ -928,6 +934,16 @@ class ProdsellerPlugin:
                             text="⏯ 切换映射",
                             callback_data=f"plugin:prodseller:togglemapping:{mapping.id}",
                             style="danger",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📈 自动跟价",
+                            callback_data=f"plugin:prodseller:suggest:{mapping.id}",
+                        ),
+                        InlineKeyboardButton(
+                            text="✏️ 手动定价",
+                            callback_data=f"plugin:prodseller:custom:{mapping.id}",
                         ),
                     ],
                     [
@@ -1131,8 +1147,15 @@ class ProdsellerPlugin:
             if price is None:
                 await callback.answer("销售价格不存在", show_alert=True)
                 return
-            price.amount_minor = self._sale_price(mapping.cost_amount_minor)
+            suggested = self._sale_price(mapping.cost_amount_minor)
+            price.amount_minor = suggested
             price.is_active = True
+            price.metadata_json = {
+                **(price.metadata_json or {}),
+                "source": PROVIDER,
+                "pricing": "auto_markup",
+                "minimum_safe_minor": suggested,
+            }
             mapping.suspended_for_profit = False
             mapping.suspension_reason = None
         await callback.answer("已应用建议售价")
@@ -1185,6 +1208,12 @@ class ProdsellerPlugin:
                     raise ValueError("销售价格不存在")
                 price.amount_minor = amount_minor
                 price.is_active = True
+                price.metadata_json = {
+                    **(price.metadata_json or {}),
+                    "source": PROVIDER,
+                    "pricing": "manual_protected",
+                    "minimum_safe_minor": required,
+                }
                 mapping.suspended_for_profit = False
                 mapping.suspension_reason = None
         except (ValueError, KeyError) as exc:
@@ -1394,7 +1423,11 @@ class ProdsellerPlugin:
                     currency="USD",
                     amount_minor=sale_minor,
                     is_active=True,
-                    metadata_json={"source": PROVIDER, "pricing": "suggested"},
+                    metadata_json={
+                        "source": PROVIDER,
+                        "pricing": "auto_markup",
+                        "minimum_safe_minor": sale_minor,
+                    },
                 )
             )
             if admin_telegram_id is not None:
@@ -1467,10 +1500,16 @@ class ProdsellerPlugin:
                     sku_id=sku.id, provider="usdt", currency="USD", amount_minor=sale_minor
                 )
                 session.add(price)
+                pricing_mode = "auto_markup"
             else:
                 price.amount_minor = max(price.amount_minor, sale_minor)
+                pricing_mode = "manual_protected"
             price.is_active = True
-            price.metadata_json = {"source": PROVIDER, "pricing": "safe_floor"}
+            price.metadata_json = {
+                "source": PROVIDER,
+                "pricing": pricing_mode,
+                "minimum_safe_minor": sale_minor,
+            }
             await record_admin_action(
                 session,
                 admin_telegram_id=admin_telegram_id,
@@ -1517,8 +1556,24 @@ class ProdsellerPlugin:
                     )
                 )
                 required_sale = self._sale_price(new_cost)
-                if price and price.is_active and price.amount_minor < required_sale:
+                pricing_mode = (price.metadata_json or {}).get("pricing") if price else None
+                if price and pricing_mode == "auto_markup":
+                    price.amount_minor = required_sale
+                    price.is_active = bool(remote["inStock"])
+                    price.metadata_json = {
+                        **(price.metadata_json or {}),
+                        "source": PROVIDER,
+                        "pricing": "auto_markup",
+                        "minimum_safe_minor": required_sale,
+                    }
+                    mapping.suspended_for_profit = False
+                    mapping.suspension_reason = None
+                elif price and price.is_active and price.amount_minor < required_sale:
                     price.is_active = False
+                    price.metadata_json = {
+                        **(price.metadata_json or {}),
+                        "minimum_safe_minor": required_sale,
+                    }
                     mapping.suspended_for_profit = True
                     mapping.suspension_reason = (
                         f"sale {price.amount_minor} below required {required_sale}"
@@ -1526,6 +1581,10 @@ class ProdsellerPlugin:
                     name = str(remote.get("name") or mapping.external_product_id)
                     suspended.append((mapping.id, name, price.amount_minor, required_sale))
                 elif price and price.amount_minor >= required_sale:
+                    price.metadata_json = {
+                        **(price.metadata_json or {}),
+                        "minimum_safe_minor": required_sale,
+                    }
                     mapping.suspended_for_profit = False
                     mapping.suspension_reason = None
                 updated += 1
@@ -1536,7 +1595,6 @@ class ProdsellerPlugin:
     ) -> None:
         if not suspended or self._bot is None:
             return
-
 
         for mapping_id, name, old_price, suggested in suspended:
             text = (
@@ -1636,7 +1694,6 @@ class ProdsellerPlugin:
 
     @staticmethod
     def _is_admin(user_id: int) -> bool:
-
         return is_admin(user_id)
 
 

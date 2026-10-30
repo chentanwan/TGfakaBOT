@@ -113,10 +113,17 @@ class PriceManagerPlugin:
                 await session.scalars(select(ProductPrice).where(ProductPrice.sku_id == sku.id))
             )
         by_provider = {price.provider: price for price in prices}
+        usdt_price = by_provider.get("usdt")
+        pricing_mode = (usdt_price.metadata_json or {}).get("pricing") if usdt_price else None
+        pricing_label = {
+            "auto_markup": "自动跟价",
+            "manual_protected": "手动定价（利润保护）",
+        }.get(pricing_mode, "普通手动价格")
         lines = [
             f"💰 <b>{html.escape(product.name)}</b>",
             f"Stars：⭐ {sku.price_xtr} · {'启用' if sku.stars_enabled else '停用'}",
         ]
+        lines.append(f"USDT 定价策略：{pricing_label}")
         for provider, label in (("usdt", "USDT"), ("balance", "余额")):
             price = by_provider.get(provider)
             lines.append(
@@ -217,6 +224,24 @@ class PriceManagerPlugin:
                         currency="USD",
                         amount_minor=amount,
                     )
+                if provider == "usdt":
+                    async with SessionFactory() as session, session.begin():
+                        sku = await session.scalar(
+                            select(SKU).where(
+                                SKU.product_id == product_id, SKU.is_default.is_(True)
+                            )
+                        )
+                        price = await session.scalar(
+                            select(ProductPrice).where(
+                                ProductPrice.sku_id == sku.id,
+                                ProductPrice.provider == "usdt",
+                            )
+                        )
+                        if price is not None:
+                            price.metadata_json = {
+                                **(price.metadata_json or {}),
+                                "pricing": "manual_protected",
+                            }
                 async with SessionFactory() as session, session.begin():
                     await record_admin_action(
                         session,

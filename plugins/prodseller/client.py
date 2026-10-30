@@ -30,9 +30,7 @@ class ProdsellerError(Exception):
         super().__init__(message)
         self.status = status
         self.retryable = (
-            status is None or status == 429 or status >= 500
-            if retryable is None
-            else retryable
+            status is None or status == 429 or status >= 500 if retryable is None else retryable
         )
         self.rate_limit = rate_limit or RateLimit()
 
@@ -191,9 +189,7 @@ class ProdsellerClient:
         delivered_key = order.get("deliveredKey")
         if delivered_keys is None:
             delivered_keys = (
-                [delivered_key]
-                if isinstance(delivered_key, str) and delivered_key
-                else []
+                [delivered_key] if isinstance(delivered_key, str) and delivered_key else []
             )
         if not isinstance(delivered_keys, list) or not all(
             isinstance(value, str) and value for value in delivered_keys
@@ -204,7 +200,18 @@ class ProdsellerClient:
             "quantity": quantity,
             "amount": cls._amount(order.get("amount")),
             "deliveredKeys": delivered_keys,
+            "activationInstructions": cls._activation_instructions(
+                order.get("activationInstructions")
+            ),
         }
+
+    @staticmethod
+    def _activation_instructions(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ProdsellerError("上游激活说明格式无效", retryable=False)
+        return [item for item in value if item]
 
     @staticmethod
     def _rate_limit(response: ClientResponse) -> RateLimit:
