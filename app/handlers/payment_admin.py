@@ -33,6 +33,12 @@ def _is_admin(user_id: int) -> bool:
     return user_id in settings.admin_ids
 
 
+def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="« 管理后台", callback_data=callback_data)]]
+    )
+
+
 @router.callback_query(F.data == "adm:pex:list")
 async def payment_exception_list(callback: CallbackQuery) -> None:
     if not _is_admin(callback.from_user.id):
@@ -42,7 +48,9 @@ async def payment_exception_list(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         exceptions = await list_payment_exceptions(session)
     if not exceptions:
-        await callback.message.answer("✅ 当前没有待处理支付异常。")
+        await callback.message.answer(
+            "✅ 当前没有待处理支付异常。", reply_markup=_back_markup("adm:home")
+        )
         return
     lines = ["⚠️ <b>支付异常订单</b>"]
     rows = []
@@ -60,11 +68,10 @@ async def payment_exception_list(callback: CallbackQuery) -> None:
                 InlineKeyboardButton(
                     text="🆕 新卡", callback_data=f"adm:pex:ask:n:{item.order_id}"
                 ),
-                InlineKeyboardButton(
-                    text="↩️ 退款", callback_data=f"adm:pex:ask:f:{item.order_id}"
-                ),
+                InlineKeyboardButton(text="↩️ 退款", callback_data=f"adm:pex:ask:f:{item.order_id}"),
             ]
         )
+    rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
     await callback.message.answer(
         "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
@@ -79,7 +86,9 @@ async def refund_pending_list(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         pending = await list_refund_pending(session)
     if not pending:
-        await callback.message.answer("✅ 当前没有退款处理中的订单。")
+        await callback.message.answer(
+            "✅ 当前没有退款处理中的订单。", reply_markup=_back_markup("adm:home")
+        )
         return
     lines = ["⏳ <b>退款处理中与待对账</b>"]
     rows = []
@@ -103,8 +112,10 @@ async def refund_pending_list(callback: CallbackQuery) -> None:
                     ),
                 ]
             )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
-    await callback.message.answer("\n".join(lines), reply_markup=keyboard)
+    rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
+    await callback.message.answer(
+        "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
 
 
 @router.callback_query(F.data.startswith("adm:pex:ask:"))

@@ -30,6 +30,12 @@ def _is_admin(user_id: int) -> bool:
     return user_id in settings.admin_ids
 
 
+def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="« 管理后台", callback_data=callback_data)]]
+    )
+
+
 @router.callback_query(F.data == "adm:charges:list")
 async def orphan_charge_list(callback: CallbackQuery) -> None:
     if not _is_admin(callback.from_user.id):
@@ -39,7 +45,9 @@ async def orphan_charge_list(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         charges = await list_orphan_charges(session)
     if not charges:
-        await callback.message.answer("✅ 当前没有未匹配或冲突支付流水。")
+        await callback.message.answer(
+            "✅ 当前没有未匹配或冲突支付流水。", reply_markup=_back_markup("adm:home")
+        )
         return
     lines = ["🧾 <b>孤立支付流水</b>"]
     rows = []
@@ -74,6 +82,7 @@ async def orphan_charge_list(callback: CallbackQuery) -> None:
                     )
                 ]
             )
+    rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
     await callback.message.answer(
         "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
@@ -106,7 +115,8 @@ async def ask_orphan_refund(callback: CallbackQuery) -> None:
                         text="确认退款",
                         callback_data=f"adm:charge:do:{charge_id}:{token}",
                     )
-                ]
+                ],
+                [InlineKeyboardButton(text="取消", callback_data="adm:charges:list")],
             ]
         ),
     )

@@ -355,7 +355,15 @@ async def execute_balance_purchase(callback: CallbackQuery) -> None:
         f"{text(language, 'unit_price')}: ${delivery.unit_price_minor / 100:.2f}\n"
         f"{text(language, 'total')}: ${delivery.total_amount_minor / 100:.2f}\n\n"
         f"{text(language, 'delivery')}:\n{delivered}\n\n"
-        f"{text(language, 'save_delivery')}"
+        f"{text(language, 'save_delivery')}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
+                    InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+                ]
+            ]
+        ),
     )
 
 
@@ -686,7 +694,14 @@ async def callback_category(callback: CallbackQuery) -> None:
         products = await list_products(session)
     products = [product for product in products if product.category_id == category_id]
     if not products:
-        await callback.message.answer("No products in this category.")
+        await callback.message.answer(
+            "No products in this category.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="« Categories", callback_data="shop:categories")]
+                ]
+            ),
+        )
         return
     rows = []
     language = await _user_language(callback.from_user.id)
@@ -1008,7 +1023,12 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
     has_next = len(orders) > ORDERS_PAGE_SIZE
     orders = orders[:ORDERS_PAGE_SIZE]
     if not orders:
-        await target.answer("📦 暂无订单。")
+        await target.answer(
+            "📦 暂无订单。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+            ),
+        )
         return
     blocks = []
     secret_rows = []
@@ -1062,7 +1082,14 @@ async def order_detail(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         order = await get_user_order(session, callback.from_user.id, public_id)
     if order is None:
-        await callback.message.answer("Order not found.")
+        await callback.message.answer(
+            "Order not found.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="« My orders", callback_data="my_orders")]
+                ]
+            ),
+        )
         return
     amount = (
         f"⭐ {order.total_amount}"
@@ -1102,16 +1129,40 @@ async def reveal_order_secret(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         order = await get_user_order(session, callback.from_user.id, public_id)
     if order is None:
-        await callback.message.answer("❌ 订单不存在或不属于当前用户。")
+        await callback.message.answer(
+            "❌ 订单不存在或不属于当前用户。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="« My orders", callback_data="my_orders")]
+                ]
+            ),
+        )
         return
     if not order.secret:
-        await callback.message.answer("⏳ 该订单尚无可查看的卡密。")
+        await callback.message.answer(
+            "⏳ 该订单尚无可查看的卡密。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="« My orders", callback_data="my_orders")]
+                ]
+            ),
+        )
         return
     await callback.message.answer(
         "🔐 <b>订单卡密</b>\n\n"
         f"订单：<code>{order.public_id}</code>\n"
         f"卡密：<code>{html.escape(order.secret)}</code>\n\n"
-        "请勿转发；可在确认保存后删除这条 Telegram 消息。"
+        "请勿转发；可在确认保存后删除这条 Telegram 消息。",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="« Order details", callback_data=f"order_detail:{order.public_id}"
+                    ),
+                    InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+                ]
+            ]
+        ),
     )
 
 

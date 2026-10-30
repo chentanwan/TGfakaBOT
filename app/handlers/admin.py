@@ -59,6 +59,12 @@ class PaymentMethodEdit(StatesGroup):
     value = State()
 
 
+def _back_markup(callback_data: str, label: str = "« 返回") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=callback_data)]]
+    )
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in settings.admin_ids
 
@@ -108,7 +114,9 @@ async def supplier_admin_home(callback: CallbackQuery) -> None:
     await callback.answer()
     plugins = get_plugin_registry().supplier_plugins
     if not plugins:
-        await callback.message.answer("当前没有已加载的供应商插件。")
+        await callback.message.answer(
+            "当前没有已加载的供应商插件。", reply_markup=_back_markup("adm:home", "« 管理后台")
+        )
         return
     rows: list[list[InlineKeyboardButton]] = []
     lines = ["🏭 <b>供应商管理</b>"]
@@ -229,7 +237,12 @@ async def admin_product_list(callback: CallbackQuery) -> None:
         ]
         if plugin_buttons:
             rows.append(plugin_buttons)
-    rows.append([InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new"),
+            InlineKeyboardButton(text="« 管理后台", callback_data="adm:home"),
+        ]
+    )
     await callback.message.answer(
         "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
@@ -525,7 +538,9 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         records = await list_manual_usdt_reviews(session)
     if not records:
-        await callback.message.answer("当前没有待审核 USDT 商品订单。")
+        await callback.message.answer(
+            "当前没有待审核 USDT 商品订单。", reply_markup=_back_markup("adm:home", "« 管理后台")
+        )
         return
     for record in records:
         await callback.message.answer(
@@ -551,7 +566,8 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
                             callback_data=f"adm:usdt:ask:r:{record.payment_id}",
                             style="danger",
                         ),
-                    ]
+                    ],
+                    [InlineKeyboardButton(text="« 返回审核列表", callback_data="adm:usdt:list")],
                 ]
             ),
         )
@@ -596,7 +612,8 @@ async def ask_usdt_review(callback: CallbackQuery) -> None:
                         callback_data=f"adm:usdt:do:{action}:{payment_id}:{token}",
                         style="success" if action == "a" else "danger",
                     )
-                ]
+                ],
+                [InlineKeyboardButton(text="« 返回审核列表", callback_data="adm:usdt:list")],
             ]
         ),
     )
@@ -720,7 +737,9 @@ async def pending_topups(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         records = await list_pending_topups(session)
     if not records:
-        await callback.message.answer("当前没有待审核充值。")
+        await callback.message.answer(
+            "当前没有待审核充值。", reply_markup=_back_markup("adm:home", "« 管理后台")
+        )
         return
     for record in records:
         await callback.message.answer(
@@ -743,7 +762,8 @@ async def pending_topups(callback: CallbackQuery) -> None:
                             callback_data=f"adm:topup:reject:{record.id}",
                             style="danger",
                         ),
-                    ]
+                    ],
+                    [InlineKeyboardButton(text="« 返回审核列表", callback_data="adm:topups:list")],
                 ]
             ),
         )
@@ -859,7 +879,8 @@ async def admin_user_find(message: Message, state: FSMContext) -> None:
                     InlineKeyboardButton(
                         text="💰 调整余额", callback_data=f"adm:user:balance:{telegram_id}"
                     )
-                ]
+                ],
+                [InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")],
             ]
         ),
     )

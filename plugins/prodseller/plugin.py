@@ -8,7 +8,7 @@ from decimal import ROUND_CEILING, Decimal
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiohttp import web
 from sqlalchemy import select
 
@@ -445,7 +445,14 @@ class ProdsellerPlugin:
         page_size = 5
         page_items = products[page * page_size : (page + 1) * page_size]
         if not page_items:
-            await callback.message.answer("暂无更多可导入的即时交付商品。")
+            await callback.message.answer(
+                "暂无更多可导入的即时交付商品。",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")]
+                    ]
+                ),
+            )
             return
         lines = [f"🛍 <b>ProdSeller 商品 · 第 {page + 1} 页</b>"]
         rows = []
@@ -480,7 +487,7 @@ class ProdsellerPlugin:
             )
         if navigation:
             rows.append(navigation)
-        from aiogram.types import InlineKeyboardMarkup
+        rows.append([InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")])
 
         await callback.message.answer(
             "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
@@ -531,7 +538,14 @@ class ProdsellerPlugin:
         has_next = len(exceptions) > page_size
         exceptions = exceptions[:page_size]
         if not exceptions:
-            await callback.message.answer("✅ 当前筛选条件下没有待处理供货订单。")
+            await callback.message.answer(
+                "✅ 当前筛选条件下没有待处理供货订单。",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")]
+                    ]
+                ),
+            )
             return
         label = status or "全部"
         lines = [f"⚠️ <b>ProdSeller 供货异常 · {label} · 第 {page + 1} 页</b>"]
@@ -600,7 +614,7 @@ class ProdsellerPlugin:
             )
         if navigation:
             rows.append(navigation)
-        from aiogram.types import InlineKeyboardMarkup
+        rows.append([InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")])
 
         await callback.message.answer(
             "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
@@ -675,7 +689,6 @@ class ProdsellerPlugin:
         if not candidates:
             await callback.answer("没有符合商品、数量、金额和时间的候选", show_alert=True)
             return
-        from aiogram.types import InlineKeyboardMarkup
 
         lines = ["🧩 <b>上游订单候选</b>", f"本地订单：<code>{context.public_id}</code>"]
         rows = []
@@ -859,7 +872,6 @@ class ProdsellerPlugin:
         suggested = self._sale_price(mapping.cost_amount_minor)
         actual = price.amount_minor if price else None
         profit = actual - mapping.cost_amount_minor if actual is not None else None
-        from aiogram.types import InlineKeyboardMarkup
 
         await callback.answer()
         await callback.message.answer(
@@ -893,6 +905,7 @@ class ProdsellerPlugin:
                             callback_data=f"plugin:prodseller:priority:{mapping.id}",
                         )
                     ],
+                    [InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")],
                 ]
             ),
         )
@@ -1107,7 +1120,14 @@ class ProdsellerPlugin:
         except ProdsellerError as exc:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return
-        await callback.message.answer(f"ProdSeller 余额：${balance:.2f} USD")
+        await callback.message.answer(
+            f"ProdSeller 余额：${balance:.2f} USD",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")]
+                ]
+            ),
+        )
 
     async def _health(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
@@ -1141,13 +1161,23 @@ class ProdsellerPlugin:
                 f"本地映射：{len(mappings)}\n"
                 f"最近同步：{last_sync or '尚未同步'}\n"
                 f"请求额度：{quota}\n"
-                f"后台保留：{self.settings.prodseller_rate_limit_reserve}"
+                f"后台保留：{self.settings.prodseller_rate_limit_reserve}",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")]
+                    ]
+                ),
             )
         except ProdsellerError as exc:
             await callback.message.answer(
                 "🩺 <b>ProdSeller 健康状态</b>\n\n"
                 f"API：❌ {html.escape(str(exc))}\n"
-                f"HTTP：{exc.status or '网络/未知'}"
+                f"HTTP：{exc.status or '网络/未知'}",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")]
+                    ]
+                ),
             )
 
     async def _sync(self, callback: CallbackQuery) -> None:
@@ -1176,7 +1206,12 @@ class ProdsellerPlugin:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return
         await callback.message.answer(
-            f"✅ 已同步 {updated} 个已接入商品；利润保护停用 {len(suspended)} 个。"
+            f"✅ 已同步 {updated} 个已接入商品；利润保护停用 {len(suspended)} 个。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")]
+                ]
+            ),
         )
 
     async def _start_import(self, callback: CallbackQuery, state: FSMContext) -> None:
@@ -1338,7 +1373,6 @@ class ProdsellerPlugin:
     ) -> None:
         if not suspended or self._bot is None:
             return
-        from aiogram.types import InlineKeyboardMarkup
 
         from app.core.config import get_settings
 
