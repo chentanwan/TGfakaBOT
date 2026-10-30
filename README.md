@@ -181,9 +181,9 @@ Admin workflow:
 
 1. Enable `plugins.prodseller` in `PLUGIN_MODULES`.
 2. Use `/admin` → **ProdSeller balance** to verify authentication.
-3. Select **Import ProdSeller product** and paste an upstream product ID.
-4. The bot imports instant-delivery products only, imports them as draft, disables Stars for those SKUs, and creates a disabled neutral USDT price with the configured markup.
-5. Review and enable the USDT price before selling. **Sync upstream** refreshes cost and stock for imported products.
+3. Open **Supplier management** to browse the live upstream catalog, import a product as a new local draft, or map an upstream product ID to an existing local product's default SKU.
+4. The bot accepts instant-delivery products only, uses the account-specific upstream `price` as cost, disables Stars only on newly imported supplier SKUs, and enables a profit-protected suggested USDT price. Existing local product status and Stars settings are preserved when mapping.
+5. Review the draft or mapped product before selling. **Sync upstream** refreshes cost and stock; email-activation products remain unsupported until checkout collects customer email.
 
 After a successful customer payment, the supplier purchase uses `Idempotency-Key: tgfakabot-<public order id>`. Before purchase it re-reads the authoritative product detail and verifies current total cost, exact stock, quantity, and email requirements. Quantity purchases are sent upstream as one idempotent order; every returned key is individually validated, encrypted into the normal card vault, and committed atomically. Products requiring customer email activation are intentionally rejected until a dedicated customer-email consent flow exists.
 

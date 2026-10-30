@@ -40,6 +40,10 @@ class ImportProduct(StatesGroup):
     external_id = State()
 
 
+class MapProduct(StatesGroup):
+    external_id = State()
+
+
 class SupplierRecovery(StatesGroup):
     note = State()
 
@@ -71,6 +75,9 @@ class ProdsellerPlugin:
             self._import_from_browser, F.data.startswith("plugin:prodseller:add:")
         )
         self.router.callback_query.register(
+            self._start_import, F.data == "plugin:prodseller:import"
+        )
+        self.router.callback_query.register(
             self._exceptions, F.data.startswith("plugin:prodseller:exceptions:")
         )
         self.router.callback_query.register(
@@ -81,6 +88,9 @@ class ProdsellerPlugin:
         )
         self.router.callback_query.register(
             self._mapping_detail, F.data.startswith("plugin:prodseller:mapping:")
+        )
+        self.router.callback_query.register(
+            self._start_mapping, F.data.startswith("plugin:prodseller:map:")
         )
         self.router.callback_query.register(
             self._sync_mapping, F.data.startswith("plugin:prodseller:syncmapping:")
@@ -106,6 +116,8 @@ class ProdsellerPlugin:
             self._select_recovery_candidate,
             F.data.startswith("plugin:prodseller:selectcandidate:"),
         )
+        self.router.message.register(self._finish_import, ImportProduct.external_id)
+        self.router.message.register(self._finish_mapping, MapProduct.external_id)
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
         self.router.message.register(self._save_custom_price, CustomPrice.amount)
         self.router.message.register(self._save_routing_priority, RoutingPriority.value)
@@ -144,7 +156,10 @@ class ProdsellerPlugin:
             [
                 InlineKeyboardButton(
                     text="🩺 ProdSeller 健康", callback_data="plugin:prodseller:health"
-                )
+                ),
+                InlineKeyboardButton(
+                    text="🔗 手动导入 ID", callback_data="plugin:prodseller:import"
+                ),
             ],
         ]
 
@@ -442,6 +457,14 @@ class ProdsellerPlugin:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return
         products = [item for item in products if not item["requiresEmailActivation"]]
+        async with SessionFactory() as session:
+            mapped_ids = set(
+                await session.scalars(
+                    select(SupplierProduct.external_product_id).where(
+                        SupplierProduct.provider == PROVIDER
+                    )
+                )
+            )
         page_size = 5
         page_items = products[page * page_size : (page + 1) * page_size]
         if not page_items:
@@ -464,11 +487,18 @@ class ProdsellerPlugin:
                 f"\n<b>{html.escape(item['name'])}</b>\n"
                 f"成本 ${cost_minor / 100:.2f} · 建议售价 ${sale_minor / 100:.2f} · {stock}"
             )
+            mapped = item["id"] in mapped_ids
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=f"导入 {item['name'][:20]}",
-                        callback_data=f"plugin:prodseller:add:{item['id']}",
+                        text=(
+                            f"✅ 已接入 {item['name'][:16]}"
+                            if mapped
+                            else f"➕ 导入 {item['name'][:16]}"
+                        ),
+                        callback_data=(
+                            "adm:list" if mapped else f"plugin:prodseller:add:{item['id']}"
+                        ),
                     )
                 ]
             )
@@ -500,19 +530,25 @@ class ProdsellerPlugin:
         external_id = callback.data.rsplit(":", 1)[1]
         await callback.answer("导入中…")
         try:
-            products = await self.client.list_products()
-            product = next(item for item in products if item["id"] == external_id)
+            product = await self.client.get_product(external_id)
             if product["requiresEmailActivation"]:
                 raise ProdsellerError("该商品需要买家邮箱，当前版本暂不支持")
             local_id = await self._import_product(product, admin_telegram_id=callback.from_user.id)
-        except StopIteration:
-            await callback.message.answer("❌ 上游商品不存在。")
-            return
         except ProdsellerError as exc:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return
         await callback.message.answer(
-            f"✅ 商品已导入为草稿；建议售价默认关闭。\n本地商品 ID：<code>{local_id}</code>"
+            f"✅ 商品已导入为草稿并启用建议 USDT 售价。\n本地商品 ID：<code>{local_id}</code>",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="📦 商品与库存", callback_data="adm:list"),
+                        InlineKeyboardButton(
+                            text="« 上游商品", callback_data="plugin:prodseller:browse:0"
+                        ),
+                    ]
+                ]
+            ),
         )
 
     async def _exceptions(self, callback: CallbackQuery) -> None:
@@ -866,7 +902,21 @@ class ProdsellerPlugin:
                 )
             ).first()
         if row is None:
-            await callback.answer("该商品没有 ProdSeller 映射", show_alert=True)
+            await callback.answer()
+            await callback.message.answer(
+                "该商品尚未映射 ProdSeller。",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="🔗 输入上游商品 ID",
+                                callback_data=f"plugin:prodseller:map:{product_id}",
+                            )
+                        ],
+                        [InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")],
+                    ]
+                ),
+            )
             return
         product, _, mapping, price = row
         suggested = self._sale_price(mapping.cost_amount_minor)
@@ -906,6 +956,58 @@ class ProdsellerPlugin:
                         )
                     ],
                     [InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")],
+                ]
+            ),
+        )
+
+    async def _start_mapping(self, callback: CallbackQuery, state: FSMContext) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        async with SessionFactory() as session:
+            product = await session.get(Product, product_id)
+        if product is None:
+            await callback.answer("本地商品不存在", show_alert=True)
+            return
+        await state.set_state(MapProduct.external_id)
+        await state.update_data(map_local_product_id=str(product_id))
+        await callback.answer()
+        await callback.message.answer(
+            f"正在映射：<b>{html.escape(product.name)}</b>\n\n"
+            "请输入 ProdSeller 商品 ID；发送 /cancel 取消。"
+        )
+
+    async def _finish_mapping(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.from_user.id):
+            return
+        data = await state.get_data()
+        try:
+            product_id = uuid.UUID(str(data["map_local_product_id"]))
+            remote = await self.client.get_product((message.text or "").strip())
+            if remote["requiresEmailActivation"]:
+                raise ValueError("该商品需要买家邮箱激活，当前销售流程暂不支持")
+            await self._map_existing_product(
+                product_id, remote, admin_telegram_id=message.from_user.id
+            )
+        except (KeyError, ValueError, ProdsellerError) as exc:
+            await message.answer(f"❌ {html.escape(str(exc))}")
+            return
+        await state.clear()
+        await message.answer(
+            "✅ 映射成功，已启用建议 USDT 售价。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="查看映射", callback_data=f"plugin:prodseller:mapping:{product_id}"
+                        ),
+                        InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list"),
+                    ]
                 ]
             ),
         )
@@ -1227,11 +1329,7 @@ class ProdsellerPlugin:
             return
         external_id = (message.text or "").strip()
         try:
-            products = await self.client.list_products()
-            product = next(item for item in products if item["id"] == external_id)
-        except StopIteration:
-            await message.answer("❌ 未找到该上游商品。")
-            return
+            product = await self.client.get_product(external_id)
         except ProdsellerError as exc:
             await message.answer(f"❌ {html.escape(str(exc))}")
             return
@@ -1241,9 +1339,19 @@ class ProdsellerPlugin:
         local_id = await self._import_product(product, admin_telegram_id=message.from_user.id)
         await state.clear()
         await message.answer(
-            "✅ 已导入上游商品。\n"
+            "✅ 已导入上游商品并启用建议 USDT 售价。\n"
             f"本地商品 ID：<code>{local_id}</code>\n"
-            "请在商品列表设置 USDT 美元售价后再上架销售。"
+            "商品保持草稿状态，请在商品与库存中确认后上架。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="📦 商品与库存", callback_data="adm:list"),
+                        InlineKeyboardButton(
+                            text="« 上游商品", callback_data="plugin:prodseller:browse:0"
+                        ),
+                    ]
+                ]
+            ),
         )
 
     @staticmethod
@@ -1277,7 +1385,7 @@ class ProdsellerPlugin:
             await session.flush()
             sku = SKU(
                 product_id=product.id,
-                code=f"prodseller-{remote['id']}",
+                code=f"prodseller-{uuid.uuid5(uuid.NAMESPACE_URL, remote['id']).hex[:40]}",
                 name="Default",
                 price_xtr=1,
                 stars_enabled=False,
@@ -1304,8 +1412,8 @@ class ProdsellerPlugin:
                     provider="usdt",
                     currency="USD",
                     amount_minor=sale_minor,
-                    is_active=False,
-                    metadata_json={"source": PROVIDER},
+                    is_active=True,
+                    metadata_json={"source": PROVIDER, "pricing": "suggested"},
                 )
             )
             if admin_telegram_id is not None:
@@ -1323,6 +1431,80 @@ class ProdsellerPlugin:
                     },
                 )
             return product.id
+
+    async def _map_existing_product(
+        self, product_id: uuid.UUID, remote: dict, *, admin_telegram_id: int
+    ) -> uuid.UUID:
+        cost_minor = self._minor(remote["price"])
+        sale_minor = self._sale_price(cost_minor)
+        async with SessionFactory() as session, session.begin():
+            product = await session.get(Product, product_id)
+            if product is None:
+                raise ValueError("本地商品不存在")
+            sku = await session.scalar(
+                select(SKU).where(SKU.product_id == product_id, SKU.is_default.is_(True))
+            )
+            if sku is None:
+                raise ValueError("本地商品没有默认规格")
+            conflict = await session.scalar(
+                select(SupplierProduct).where(
+                    SupplierProduct.provider == PROVIDER,
+                    SupplierProduct.external_product_id == remote["id"],
+                )
+            )
+            if conflict is not None and conflict.sku_id != sku.id:
+                raise ValueError("该上游商品已映射到其他本地商品")
+            mapping = await session.scalar(
+                select(SupplierProduct).where(
+                    SupplierProduct.sku_id == sku.id, SupplierProduct.provider == PROVIDER
+                )
+            )
+            if mapping is None:
+                mapping = SupplierProduct(
+                    sku_id=sku.id,
+                    provider=PROVIDER,
+                    external_product_id=remote["id"],
+                    cost_currency="USD",
+                    cost_amount_minor=cost_minor,
+                )
+                session.add(mapping)
+            mapping.external_product_id = remote["id"]
+            mapping.cost_amount_minor = cost_minor
+            mapping.in_stock = remote["inStock"]
+            mapping.requires_customer_email = remote["requiresEmailActivation"]
+            mapping.metadata_json = self._json_safe_remote(remote)
+            mapping.last_synced_at = datetime.now(UTC)
+            mapping.suspended_for_profit = False
+            mapping.suspension_reason = None
+            price = await session.scalar(
+                select(ProductPrice).where(
+                    ProductPrice.sku_id == sku.id, ProductPrice.provider == "usdt"
+                )
+            )
+            if price is None:
+                price = ProductPrice(
+                    sku_id=sku.id, provider="usdt", currency="USD", amount_minor=sale_minor
+                )
+                session.add(price)
+            else:
+                price.amount_minor = max(price.amount_minor, sale_minor)
+            price.is_active = True
+            price.metadata_json = {"source": PROVIDER, "pricing": "safe_floor"}
+            await record_admin_action(
+                session,
+                admin_telegram_id=admin_telegram_id,
+                action="supplier_product_map",
+                target_type="product",
+                target_id=str(product.id),
+                details={
+                    "provider": PROVIDER,
+                    "external_product_id": remote["id"],
+                    "cost_amount_minor": cost_minor,
+                    "sale_amount_minor": price.amount_minor,
+                },
+            )
+            await session.flush()
+            return mapping.id
 
     async def _sync_existing(
         self, products: list[dict]
