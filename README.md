@@ -192,7 +192,7 @@ Each supplier plugin owns independent pricing and synchronization variables. Pro
 
 ### Supplier operations and recovery
 
-The ProdSeller admin menu now includes a paginated upstream catalog with cost, suggested USD sale price, stock, and one-click draft import. The supplier exception queue lists pending, paid, failed, and unknown purchases. A recovery action requires an administrator evidence note, queries the authoritative upstream order, records the administrator/time/note audit, and only delivers a key when the upstream status is `delivered`.
+The ProdSeller admin menu now shows the complete upstream catalog on one page, with cost, suggested USD sale price, stock, and one-click draft import. The supplier exception queue lists pending, paid, failed, and unknown purchases. A recovery action requires an administrator evidence note, queries the authoritative upstream order, records the administrator/time/note audit, and only delivers a key when the upstream status is `delivered`.
 
 Automatic product synchronization enforces the configured profit floor. If an active USDT sale price falls below `upstream cost + percentage profit + fixed profit`, the payment price is disabled and the supplier mapping is marked as profit-suspended; it is never silently increased. An administrator must review and re-enable a safe price.
 

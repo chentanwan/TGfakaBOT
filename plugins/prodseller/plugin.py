@@ -446,10 +446,6 @@ class ProdsellerPlugin:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
             return
-        try:
-            page = max(0, int(callback.data.rsplit(":", 1)[1]))
-        except (ValueError, IndexError):
-            page = 0
         await callback.answer("加载中…")
         try:
             products = await self.client.list_products()
@@ -465,9 +461,7 @@ class ProdsellerPlugin:
                     )
                 )
             )
-        page_size = 5
-        page_items = products[page * page_size : (page + 1) * page_size]
-        if not page_items:
+        if not products:
             await callback.message.answer(
                 "暂无更多可导入的即时交付商品。",
                 reply_markup=InlineKeyboardMarkup(
@@ -477,15 +471,16 @@ class ProdsellerPlugin:
                 ),
             )
             return
-        lines = [f"🛍 <b>ProdSeller 商品 · 第 {page + 1} 页</b>"]
+        lines = [f"🛍 <b>ProdSeller 商品 · 共 {len(products)} 个</b>"]
         rows = []
-        for item in page_items:
+        for index, item in enumerate(products, start=1):
             cost_minor = self._minor(item["price"])
             sale_minor = self._sale_price(cost_minor)
             stock = "有货" if item["inStock"] else "缺货"
+            display_name = html.escape(item["name"][:30])
             lines.append(
-                f"\n<b>{html.escape(item['name'])}</b>\n"
-                f"成本 ${cost_minor / 100:.2f} · 建议售价 ${sale_minor / 100:.2f} · {stock}"
+                f"{index}. <b>{display_name}</b> · "
+                f"${cost_minor / 100:.2f}→${sale_minor / 100:.2f} · {stock}"
             )
             mapped = item["id"] in mapped_ids
             rows.append(
@@ -502,21 +497,6 @@ class ProdsellerPlugin:
                     )
                 ]
             )
-        navigation = []
-        if page > 0:
-            navigation.append(
-                InlineKeyboardButton(
-                    text="⬅️ 上一页", callback_data=f"plugin:prodseller:browse:{page - 1}"
-                )
-            )
-        if (page + 1) * page_size < len(products):
-            navigation.append(
-                InlineKeyboardButton(
-                    text="下一页 ➡️", callback_data=f"plugin:prodseller:browse:{page + 1}"
-                )
-            )
-        if navigation:
-            rows.append(navigation)
         rows.append([InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")])
 
         await callback.message.answer(

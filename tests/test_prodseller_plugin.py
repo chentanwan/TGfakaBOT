@@ -107,6 +107,18 @@ def test_every_example_environment_variable_has_comment() -> None:
         assert index > 0 and lines[index - 1].startswith("#"), line
 
 
+def test_supplier_catalog_uses_single_page_display() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    browse = source[
+        source.index("    async def _browse(") : source.index("    async def _import_from_browser(")
+    ]
+    assert "for index, item in enumerate(products, start=1)" in browse
+    assert "page_size" not in browse
+    assert "上一页" not in browse
+    assert "下一页" not in browse
+    assert "共 {len(products)} 个" in browse
+
+
 def test_admin_has_product_browser_and_exception_recovery() -> None:
     source = Path("plugins/prodseller/plugin.py").read_text()
     assert "plugin:prodseller:browse:" in source
@@ -201,9 +213,12 @@ def test_background_tasks_reserve_api_quota_for_fulfillment() -> None:
     plugin.settings = ProdsellerSettings(
         prodseller_api_key="test", prodseller_rate_limit_reserve=20
     )
+
     class Client:
         pass
+
     from plugins.prodseller.client import RateLimit
+
     plugin.client = Client()
     plugin.client.rate_limit = RateLimit(limit=300, remaining=20)
     assert plugin._rate_limit_exhausted() is True
@@ -230,6 +245,7 @@ def test_admin_can_review_and_select_ambiguous_supplier_candidates() -> None:
 
 def test_normalized_supplier_metadata_is_json_serializable() -> None:
     import json
+
     remote = {"id": "p1", "price": Decimal("0.02"), "nested": {"ok": True}}
     safe = ProdsellerPlugin._json_safe_remote(remote)
     assert safe["price"] == "0.02"
@@ -406,6 +422,6 @@ def test_usdt_review_snapshots_destination_and_requires_confirmation() -> None:
 def test_manual_usdt_approval_ends_lookup_transaction_before_fulfillment() -> None:
     source = Path("app/services/plugin_payments.py").read_text()
     start = source.index("async def approve_manual_usdt_payment")
-    body = source[start:source.index("async def reject_manual_usdt_payment", start)]
+    body = source[start : source.index("async def reject_manual_usdt_payment", start)]
     assert "await session.rollback()" in body
     assert body.index("await session.rollback()") < body.index("await fulfill_plugin_payment(")
