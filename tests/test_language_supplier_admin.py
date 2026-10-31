@@ -58,3 +58,4 @@ def test_safe_supplier_prices_are_restored_for_purchase() -> None:
     assert "SET is_active = true" in migration
     assert "minimum_safe_minor" in migration
     assert 'price.is_active = bool(remote["inStock"])' in plugin
+    assert 'pricing_mode = "auto_markup"' in plugin

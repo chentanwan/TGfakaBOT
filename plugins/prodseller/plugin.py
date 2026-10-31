@@ -1550,6 +1550,12 @@ class ProdsellerPlugin:
                 )
                 required_sale = self._sale_price(new_cost)
                 pricing_mode = (price.metadata_json or {}).get("pricing") if price else None
+                if (
+                    price
+                    and pricing_mode is None
+                    and (price.metadata_json or {}).get("source") == PROVIDER
+                ):
+                    pricing_mode = "auto_markup"
                 if price and pricing_mode == "auto_markup":
                     price.amount_minor = required_sale
                     price.is_active = bool(remote["inStock"])
