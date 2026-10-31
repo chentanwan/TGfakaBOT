@@ -4,7 +4,7 @@ from pathlib import Path
 def test_admin_lists_have_back_navigation() -> None:
     source = Path("app/handlers/admin.py").read_text()
     assert 'text="« 管理后台", callback_data="adm:home"' in source
-    assert 'text="« 返回审核列表", callback_data="adm:usdt:list"' in source
+    assert 'text="⬅️ 返回订单支付审核", callback_data="adm:usdt:list"' in source
     assert 'text="« 返回审核列表", callback_data="adm:topups:list"' in source
 
 

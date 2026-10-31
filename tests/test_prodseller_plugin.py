@@ -397,7 +397,7 @@ def test_direct_usdt_purchase_uses_neutral_price_and_manual_proof() -> None:
 def test_admin_reviews_manual_usdt_orders_safely() -> None:
     admin = Path("app/handlers/admin.py").read_text()
     payments = Path("app/services/plugin_payments.py").read_text()
-    assert 'text="₮ USDT 审核"' in admin
+    assert 'text="🧾 订单支付审核"' in admin
     assert 'F.data == "adm:usdt:list"' in admin
     assert "approve_manual_usdt_payment" in admin
     assert "reject_manual_usdt_payment" in admin

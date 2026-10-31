@@ -82,7 +82,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⚙️ 支付设置", callback_data="adm:usdt:health"),
         ],
         [
-            InlineKeyboardButton(text="₮ USDT 审核", callback_data="adm:usdt:list"),
+            InlineKeyboardButton(text="🧾 订单支付审核", callback_data="adm:usdt:list"),
             InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list"),
         ],
         [InlineKeyboardButton(text="🛡 管理员管理", callback_data="plugin:adminmgr:list")],
@@ -587,12 +587,13 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
         records = await list_manual_usdt_reviews(session)
     if not records:
         await callback.message.answer(
-            "当前没有待审核 USDT 商品订单。", reply_markup=_back_markup("adm:home", "« 管理后台")
+            "当前没有待审核的商品订单付款。",
+            reply_markup=_back_markup("adm:home", "⬅️ 管理后台"),
         )
         return
     for record in records:
         await callback.message.answer(
-            "₮ <b>待审核 USDT 商品订单</b>\n"
+            "🧾 <b>待审核商品订单付款</b>\n"
             f"订单：<code>{record.public_id}</code>\n"
             f"用户：<code>{record.telegram_user_id}</code>\n"
             f"商品：{html.escape(record.product_name)}\n"
@@ -615,7 +616,11 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
                             style="danger",
                         ),
                     ],
-                    [InlineKeyboardButton(text="« 返回审核列表", callback_data="adm:usdt:list")],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ 返回订单支付审核", callback_data="adm:usdt:list"
+                        )
+                    ],
                 ]
             ),
         )
@@ -661,7 +666,7 @@ async def ask_usdt_review(callback: CallbackQuery) -> None:
                         style="success" if action == "a" else "danger",
                     )
                 ],
-                [InlineKeyboardButton(text="« 返回审核列表", callback_data="adm:usdt:list")],
+                [InlineKeyboardButton(text="⬅️ 返回订单支付审核", callback_data="adm:usdt:list")],
             ]
         ),
     )
