@@ -116,7 +116,7 @@ async def main() -> None:
         state["evm_amount"] = 2_000_000
         result = await verify_usdt_payment(
             settings,
-            method_id="usdt_arbitrum",
+            method_id="usdt_bep20",
             proof="0x" + "2" * 64,
             destination=destination,
             expected_amount_minor=100,
