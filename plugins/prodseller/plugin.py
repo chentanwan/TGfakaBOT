@@ -3,7 +3,7 @@ import html
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -53,6 +53,10 @@ class CustomPrice(StatesGroup):
     amount = State()
 
 
+class AutoPricing(StatesGroup):
+    value = State()
+
+
 class RoutingPriority(StatesGroup):
     value = State()
 
@@ -82,7 +86,8 @@ class ProdsellerPlugin:
             self._exceptions, F.data.startswith("plugin:prodseller:exceptions:")
         )
         self.router.callback_query.register(self._audit_detail, F.data.startswith("ps:a:"))
-        self.router.callback_query.register(self._apply_suggested_price, F.data.startswith("ps:g:"))
+        self.router.callback_query.register(self._choose_auto_pricing, F.data.startswith("ps:g:"))
+        self.router.callback_query.register(self._start_auto_pricing, F.data.startswith("ps:ap:"))
         self.router.callback_query.register(self._mapping_detail, F.data.startswith("ps:m:"))
         self.router.callback_query.register(self._start_mapping, F.data.startswith("ps:map:"))
         self.router.callback_query.register(self._sync_mapping, F.data.startswith("ps:s:"))
@@ -105,6 +110,7 @@ class ProdsellerPlugin:
         self.router.message.register(self._finish_mapping, MapProduct.external_id)
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
         self.router.message.register(self._save_custom_price, CustomPrice.amount)
+        self.router.message.register(self._save_auto_pricing, AutoPricing.value)
         self.router.message.register(self._save_routing_priority, RoutingPriority.value)
         self._bot: Bot | None = None
         self._poll_task: asyncio.Task | None = None
@@ -498,7 +504,7 @@ class ProdsellerPlugin:
             await callback.message.answer(f"❌ {html.escape(str(exc))}")
             return
         await callback.message.answer(
-            f"✅ 商品已导入为草稿并启用建议 USDT 售价。\n本地商品 ID：<code>{local_id}</code>",
+            f"✅ 商品已导入为草稿并启用自动美元定价。\n本地商品 ID：<code>{local_id}</code>",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -889,7 +895,7 @@ class ProdsellerPlugin:
                                 callback_data=f"ps:map:{product_id}",
                             )
                         ],
-                        [InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")],
+                        [InlineKeyboardButton(text="⬅️ 商品与库存", callback_data="adm:list")],
                     ]
                 ),
             )
@@ -900,8 +906,10 @@ class ProdsellerPlugin:
         profit = actual - mapping.cost_amount_minor if actual is not None else None
         pricing_mode = (price.metadata_json or {}).get("pricing") if price else None
         pricing_label = {
-            "auto_markup": "自动跟价",
-            "manual_protected": "手动定价（利润保护）",
+            "auto_fixed": "自动定价 · 固定利润",
+            "auto_percent": "自动定价 · 比例利润",
+            "auto_markup": "自动定价 · 组合利润",
+            "manual_protected": "手动定价",
         }.get(pricing_mode, "未指定")
 
         await callback.answer()
@@ -933,7 +941,7 @@ class ProdsellerPlugin:
                     ],
                     [
                         InlineKeyboardButton(
-                            text="📈 自动跟价",
+                            text="🤖 自动定价",
                             callback_data=f"ps:g:{mapping.id}",
                         ),
                         InlineKeyboardButton(
@@ -943,11 +951,11 @@ class ProdsellerPlugin:
                     ],
                     [
                         InlineKeyboardButton(
-                            text="🔢 设置路由优先级",
+                            text="🔢 路由优先级",
                             callback_data=f"ps:p:{mapping.id}",
                         )
                     ],
-                    [InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")],
+                    [InlineKeyboardButton(text="⬅️ 商品与库存", callback_data="adm:list")],
                 ]
             ),
         )
@@ -991,12 +999,12 @@ class ProdsellerPlugin:
             return
         await state.clear()
         await message.answer(
-            "✅ 映射成功，已启用建议 USDT 售价。",
+            "✅ 映射成功，已启用自动美元定价。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(text="查看映射", callback_data=f"ps:m:{product_id}"),
-                        InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list"),
+                        InlineKeyboardButton(text="⬅️ 商品与库存", callback_data="adm:list"),
                     ]
                 ]
             ),
@@ -1111,48 +1119,157 @@ class ProdsellerPlugin:
         await state.clear()
         await message.answer(f"✅ 路由优先级已设置为 {priority}。")
 
-    async def _apply_suggested_price(self, callback: CallbackQuery) -> None:
+    async def _choose_auto_pricing(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
             return
         try:
-            supplier_product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+            mapping_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
         except (ValueError, IndexError):
             await callback.answer("参数错误", show_alert=True)
             return
-        async with SessionFactory() as session, session.begin():
-            mapping = await session.scalar(
-                select(SupplierProduct)
-                .where(SupplierProduct.id == supplier_product_id)
-                .with_for_update()
-            )
+        await callback.answer()
+        await callback.message.answer(
+            "🤖 <b>自动定价方式</b>\n\n请选择利润计算方式：",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"💵 固定利润 · ${self.settings.prodseller_profit_fixed:.2f}",
+                            callback_data=f"ps:ap:f:{mapping_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=f"📈 比例利润 · {self.settings.prodseller_profit_percent}%",
+                            callback_data=f"ps:ap:p:{mapping_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ 返回商品详情",
+                            callback_data=f"ps:m:{await self._mapping_product_id(mapping_id)}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+    async def _mapping_product_id(self, mapping_id: uuid.UUID) -> uuid.UUID:
+        async with SessionFactory() as session:
+            mapping = await session.get(SupplierProduct, mapping_id)
             if mapping is None:
-                await callback.answer("上游商品不存在", show_alert=True)
-                return
-            price = await session.scalar(
-                select(ProductPrice)
-                .where(
-                    ProductPrice.sku_id == mapping.sku_id,
-                    ProductPrice.provider == "usdt",
+                raise ValueError("上游商品不存在")
+            sku = await session.get(SKU, mapping.sku_id)
+            if sku is None:
+                raise ValueError("商品不存在")
+            return sku.product_id
+
+    async def _start_auto_pricing(self, callback: CallbackQuery, state: FSMContext) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        try:
+            _, _, mode, raw_mapping_id = callback.data.split(":", 3)
+            mapping_id = uuid.UUID(raw_mapping_id)
+            if mode not in {"f", "p"}:
+                raise ValueError
+        except (ValueError, IndexError):
+            await callback.answer("参数错误", show_alert=True)
+            return
+        await state.update_data(auto_mapping_id=str(mapping_id), auto_pricing_mode=mode)
+        await state.set_state(AutoPricing.value)
+        await callback.answer()
+        prompt = (
+            "💵 请输入每件固定利润（USD），例如 1.50"
+            if mode == "f"
+            else "📈 请输入利润比例，例如 20 表示 20%"
+        )
+        await callback.message.answer(f"{prompt}；发送 /cancel 取消。")
+
+    async def _save_auto_pricing(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.from_user.id):
+            return
+        try:
+            data = await state.get_data()
+            mapping_id = uuid.UUID(data["auto_mapping_id"])
+            mode = data["auto_pricing_mode"]
+            value = Decimal((message.text or "").strip())
+            if not value.is_finite() or value < 0:
+                raise ValueError
+            async with SessionFactory() as session, session.begin():
+                mapping = await session.scalar(
+                    select(SupplierProduct)
+                    .where(SupplierProduct.id == mapping_id)
+                    .with_for_update()
                 )
-                .with_for_update()
-            )
-            if price is None:
-                await callback.answer("销售价格不存在", show_alert=True)
-                return
-            suggested = self._sale_price(mapping.cost_amount_minor)
-            price.amount_minor = suggested
-            price.is_active = True
-            price.metadata_json = {
-                **(price.metadata_json or {}),
-                "source": PROVIDER,
-                "pricing": "auto_markup",
-                "minimum_safe_minor": suggested,
-            }
-            mapping.suspended_for_profit = False
-            mapping.suspension_reason = None
-        await callback.answer("已应用建议售价")
-        await callback.message.answer("✅ 已更新并启用 USDT 建议售价。")
+                if mapping is None:
+                    raise ValueError("上游商品不存在")
+                price = await session.scalar(
+                    select(ProductPrice)
+                    .where(
+                        ProductPrice.sku_id == mapping.sku_id,
+                        ProductPrice.provider == "usdt",
+                    )
+                    .with_for_update()
+                )
+                if price is None:
+                    raise ValueError("销售价格不存在")
+                if mode == "f":
+                    fixed_minor = int((value * 100).to_integral_value(rounding=ROUND_CEILING))
+                    sale_minor = mapping.cost_amount_minor + fixed_minor
+                    pricing = "auto_fixed"
+                    metadata = {"profit_fixed_minor": fixed_minor}
+                    label = f"固定利润 ${fixed_minor / 100:.2f}"
+                else:
+                    sale_minor = int(
+                        (
+                            Decimal(mapping.cost_amount_minor)
+                            * (Decimal(100) + value)
+                            / Decimal(100)
+                        ).to_integral_value(rounding=ROUND_CEILING)
+                    )
+                    pricing = "auto_percent"
+                    metadata = {"profit_percent": str(value)}
+                    label = f"比例利润 {value}%"
+                common = {
+                    **(price.metadata_json or {}),
+                    "source": PROVIDER,
+                    "pricing": pricing,
+                    "minimum_safe_minor": sale_minor,
+                    **metadata,
+                }
+                price.amount_minor = sale_minor
+                price.currency = "USD"
+                price.is_active = bool(mapping.in_stock)
+                price.metadata_json = common
+                balance = await session.scalar(
+                    select(ProductPrice)
+                    .where(
+                        ProductPrice.sku_id == mapping.sku_id,
+                        ProductPrice.provider == "balance",
+                    )
+                    .with_for_update()
+                )
+                if balance is None:
+                    balance = ProductPrice(
+                        sku_id=mapping.sku_id,
+                        provider="balance",
+                        currency="USD",
+                        amount_minor=sale_minor,
+                    )
+                    session.add(balance)
+                balance.amount_minor = sale_minor
+                balance.currency = "USD"
+                balance.is_active = bool(mapping.in_stock)
+                balance.metadata_json = common
+                mapping.suspended_for_profit = False
+                mapping.suspension_reason = None
+        except (KeyError, ValueError, InvalidOperation) as exc:
+            await message.answer(f"❌ {html.escape(str(exc) or '利润设置无效')}")
+            return
+        await state.clear()
+        await message.answer(f"✅ 已启用{label}，当前售价 ${sale_minor / 100:.2f}。")
 
     async def _start_custom_price(self, callback: CallbackQuery, state: FSMContext) -> None:
         if not self._is_admin(callback.from_user.id):
@@ -1199,14 +1316,35 @@ class ProdsellerPlugin:
                 )
                 if price is None:
                     raise ValueError("销售价格不存在")
-                price.amount_minor = amount_minor
-                price.is_active = True
-                price.metadata_json = {
+                metadata = {
                     **(price.metadata_json or {}),
                     "source": PROVIDER,
                     "pricing": "manual_protected",
                     "minimum_safe_minor": required,
                 }
+                price.amount_minor = amount_minor
+                price.is_active = True
+                price.metadata_json = metadata
+                balance = await session.scalar(
+                    select(ProductPrice)
+                    .where(
+                        ProductPrice.sku_id == mapping.sku_id,
+                        ProductPrice.provider == "balance",
+                    )
+                    .with_for_update()
+                )
+                if balance is None:
+                    balance = ProductPrice(
+                        sku_id=mapping.sku_id,
+                        provider="balance",
+                        currency="USD",
+                        amount_minor=amount_minor,
+                    )
+                    session.add(balance)
+                balance.amount_minor = amount_minor
+                balance.currency = "USD"
+                balance.is_active = True
+                balance.metadata_json = metadata
                 mapping.suspended_for_profit = False
                 mapping.suspension_reason = None
         except (ValueError, KeyError) as exc:
@@ -1342,7 +1480,7 @@ class ProdsellerPlugin:
         local_id = await self._import_product(product, admin_telegram_id=message.from_user.id)
         await state.clear()
         await message.answer(
-            "✅ 已导入上游商品并启用建议 USDT 售价。\n"
+            "✅ 已导入上游商品并启用自动美元定价。\n"
             f"本地商品 ID：<code>{local_id}</code>\n"
             "商品保持草稿状态，请在商品与库存中确认后上架。",
             reply_markup=InlineKeyboardMarkup(
@@ -1409,19 +1547,24 @@ class ProdsellerPlugin:
                     metadata_json=self._json_safe_remote(remote),
                 )
             )
-            session.add(
-                ProductPrice(
-                    sku_id=sku.id,
-                    provider="usdt",
-                    currency="USD",
-                    amount_minor=sale_minor,
-                    is_active=True,
-                    metadata_json={
-                        "source": PROVIDER,
-                        "pricing": "auto_markup",
-                        "minimum_safe_minor": sale_minor,
-                    },
-                )
+            pricing_metadata = {
+                "source": PROVIDER,
+                "pricing": "auto_percent",
+                "profit_percent": str(self.settings.prodseller_profit_percent),
+                "minimum_safe_minor": sale_minor,
+            }
+            session.add_all(
+                [
+                    ProductPrice(
+                        sku_id=sku.id,
+                        provider=provider,
+                        currency="USD",
+                        amount_minor=sale_minor,
+                        is_active=True,
+                        metadata_json=pricing_metadata,
+                    )
+                    for provider in ("usdt", "balance")
+                ]
             )
             if admin_telegram_id is not None:
                 await record_admin_action(
@@ -1493,7 +1636,7 @@ class ProdsellerPlugin:
                     sku_id=sku.id, provider="usdt", currency="USD", amount_minor=sale_minor
                 )
                 session.add(price)
-                pricing_mode = "auto_markup"
+                pricing_mode = "auto_percent"
             else:
                 price.amount_minor = max(price.amount_minor, sale_minor)
                 pricing_mode = "manual_protected"
@@ -1501,8 +1644,27 @@ class ProdsellerPlugin:
             price.metadata_json = {
                 "source": PROVIDER,
                 "pricing": pricing_mode,
+                "profit_percent": str(self.settings.prodseller_profit_percent),
                 "minimum_safe_minor": sale_minor,
             }
+            balance = await session.scalar(
+                select(ProductPrice).where(
+                    ProductPrice.sku_id == sku.id,
+                    ProductPrice.provider == "balance",
+                )
+            )
+            if balance is None:
+                balance = ProductPrice(
+                    sku_id=sku.id,
+                    provider="balance",
+                    currency="USD",
+                    amount_minor=price.amount_minor,
+                )
+                session.add(balance)
+            balance.amount_minor = price.amount_minor
+            balance.currency = "USD"
+            balance.is_active = True
+            balance.metadata_json = dict(price.metadata_json)
             await record_admin_action(
                 session,
                 admin_telegram_id=admin_telegram_id,
@@ -1548,21 +1710,21 @@ class ProdsellerPlugin:
                         ProductPrice.provider == "usdt",
                     )
                 )
-                required_sale = self._sale_price(new_cost)
                 pricing_mode = (price.metadata_json or {}).get("pricing") if price else None
+                required_sale = self._price_for_mode(new_cost, price.metadata_json if price else {})
                 if (
                     price
                     and pricing_mode is None
                     and (price.metadata_json or {}).get("source") == PROVIDER
                 ):
                     pricing_mode = "auto_markup"
-                if price and pricing_mode == "auto_markup":
+                if price and pricing_mode in {"auto_fixed", "auto_percent", "auto_markup"}:
                     price.amount_minor = required_sale
                     price.is_active = bool(remote["inStock"])
                     price.metadata_json = {
                         **(price.metadata_json or {}),
                         "source": PROVIDER,
-                        "pricing": "auto_markup",
+                        "pricing": pricing_mode,
                         "minimum_safe_minor": required_sale,
                     }
                     mapping.suspended_for_profit = False
@@ -1584,10 +1746,36 @@ class ProdsellerPlugin:
                         **(price.metadata_json or {}),
                         "minimum_safe_minor": required_sale,
                     }
-                    if pricing_mode in {"auto_markup", "manual_protected"}:
+                    if pricing_mode in {
+                        "auto_fixed",
+                        "auto_percent",
+                        "auto_markup",
+                        "manual_protected",
+                    }:
                         price.is_active = bool(remote["inStock"])
                     mapping.suspended_for_profit = False
                     mapping.suspension_reason = None
+                if price is not None:
+                    balance = await session.scalar(
+                        select(ProductPrice)
+                        .where(
+                            ProductPrice.sku_id == mapping.sku_id,
+                            ProductPrice.provider == "balance",
+                        )
+                        .with_for_update()
+                    )
+                    if balance is None:
+                        balance = ProductPrice(
+                            sku_id=mapping.sku_id,
+                            provider="balance",
+                            currency="USD",
+                            amount_minor=price.amount_minor,
+                        )
+                        session.add(balance)
+                    balance.amount_minor = price.amount_minor
+                    balance.currency = "USD"
+                    balance.is_active = price.is_active
+                    balance.metadata_json = dict(price.metadata_json or {})
                 updated += 1
         return updated, suspended
 
@@ -1671,6 +1859,18 @@ class ProdsellerPlugin:
         if isinstance(exc, ProdsellerError) and not exc.retryable:
             return "failed"
         return "unknown"
+
+    def _price_for_mode(self, cost_minor: int, metadata: dict) -> int:
+        mode = metadata.get("pricing")
+        if mode == "auto_fixed":
+            return cost_minor + int(metadata.get("profit_fixed_minor", 0))
+        if mode == "auto_percent":
+            percent = Decimal(
+                str(metadata.get("profit_percent", self.settings.prodseller_profit_percent))
+            )
+            sale = Decimal(cost_minor) * (Decimal(100) + percent) / Decimal(100)
+            return int(sale.to_integral_value(rounding=ROUND_CEILING))
+        return self._sale_price(cost_minor)
 
     def _sale_price(self, cost_minor: int) -> int:
         multiplier = (Decimal(100) + self.settings.prodseller_profit_percent) / Decimal(100)

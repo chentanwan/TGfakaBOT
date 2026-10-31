@@ -5,7 +5,8 @@ def test_known_dynamic_callbacks_fit_telegram_limit() -> None:
     uuid_value = "12345678-1234-1234-1234-123456789012"
     token = "abcdefghijkl"
     callbacks = [
-        f"pp:e:{uuid_value}:balance",
+        f"pp:e:{uuid_value}",
+        f"ps:ap:p:{uuid_value}",
         f"ps:sc:{uuid_value}:9",
         f"bb:{uuid_value}:100:{token}",
         f"uc:usdt_arbitrum:{uuid_value}",

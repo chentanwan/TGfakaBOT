@@ -16,7 +16,7 @@ from app.db.session import SessionFactory
 from app.plugins.base import PluginProduct
 from app.services.admin_access import is_admin
 from app.services.audit import record_admin_action
-from app.services.product_prices import ProductPriceError, set_product_plugin_price
+from app.services.product_prices import ProductPriceError, set_product_usd_price
 
 
 class EditPrice(StatesGroup):
@@ -39,7 +39,7 @@ class PriceManagerPlugin:
         return None
 
     def admin_product_button(self, product_id: uuid.UUID) -> InlineKeyboardButton | None:
-        return InlineKeyboardButton(text="💰 价格", callback_data=f"pp:p:{product_id}")
+        return InlineKeyboardButton(text="💰 定价", callback_data=f"pp:p:{product_id}")
 
     def admin_home_buttons(self) -> list[list[InlineKeyboardButton]]:
         return []
@@ -68,15 +68,15 @@ class PriceManagerPlugin:
         rows = [
             [
                 InlineKeyboardButton(
-                    text=product.name[:30],
+                    text=f"💰 {product.name[:28]}",
                     callback_data=f"pp:p:{product.id}",
                 )
             ]
             for product in products
         ]
-        rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
+        rows.append([InlineKeyboardButton(text="🏠 管理后台", callback_data="adm:home")])
         await callback.message.answer(
-            "💰 <b>价格设置</b>\n请选择商品：",
+            "💰 <b>商品定价</b>\n请选择商品：",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -106,43 +106,38 @@ class PriceManagerPlugin:
             )
         by_provider = {price.provider: price for price in prices}
         usdt_price = by_provider.get("usdt")
-        pricing_mode = (usdt_price.metadata_json or {}).get("pricing") if usdt_price else None
+        balance_price = by_provider.get("balance")
+        current = usdt_price or balance_price
+        enabled = bool(
+            usdt_price and balance_price and usdt_price.is_active and balance_price.is_active
+        )
+        pricing_mode = (current.metadata_json or {}).get("pricing") if current else None
         pricing_label = {
-            "auto_markup": "自动跟价",
-            "manual_protected": "手动定价（利润保护）",
-        }.get(pricing_mode, "普通手动价格")
-        lines = [
-            f"💰 <b>{html.escape(product.name)}</b>",
-            "统一使用美元价格，不再提供 Telegram Stars 付款。",
-        ]
-        lines.append(f"USDT 定价策略：{pricing_label}")
-        for provider, label in (("usdt", "USDT"), ("balance", "余额")):
-            price = by_provider.get(provider)
-            lines.append(
-                f"{label}："
-                + (
-                    f"${price.amount_minor / 100:.2f} {price.currency} · "
-                    f"{'启用' if price.is_active else '停用'}"
-                    if price
-                    else "未设置"
-                )
-            )
+            "auto_fixed": "自动定价 · 固定利润",
+            "auto_percent": "自动定价 · 比例利润",
+            "auto_markup": "自动定价 · 组合利润",
+            "manual_protected": "手动定价",
+        }.get(pricing_mode, "手动定价")
+        price_text = f"${current.amount_minor / 100:.2f}" if current else "未设置"
+        status = "✅ USDT 与余额均已启用" if enabled else "⏸ USDT 与余额已停用"
         rows = [
             [
-                InlineKeyboardButton(text="₮ 设置 USDT", callback_data=f"pp:e:{product_id}:usdt"),
-                InlineKeyboardButton(
-                    text="💵 设置余额", callback_data=f"pp:e:{product_id}:balance"
-                ),
+                InlineKeyboardButton(text="✏️ 设置美元售价", callback_data=f"pp:e:{product_id}"),
+                InlineKeyboardButton(text="⏸ 停用全部支付", callback_data=f"pp:d:{product_id}"),
             ],
-            [
-                InlineKeyboardButton(text="停用 USDT", callback_data=f"pp:d:{product_id}:usdt"),
-                InlineKeyboardButton(text="停用余额", callback_data=f"pp:d:{product_id}:balance"),
-            ],
-            [InlineKeyboardButton(text="« 价格设置", callback_data="plugin:prices:list")],
+            [InlineKeyboardButton(text="⬅️ 返回价格设置", callback_data="plugin:prices:list")],
         ]
         await callback.answer()
         await callback.message.answer(
-            "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+            "\n".join(
+                [
+                    f"💰 <b>{html.escape(product.name)}</b>",
+                    f"💵 美元售价：{price_text}",
+                    f"📊 定价模式：{pricing_label}",
+                    f"💳 支付状态：{status}",
+                ]
+            ),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
     async def _start_edit(self, callback: CallbackQuery, state: FSMContext) -> None:
@@ -150,17 +145,16 @@ class PriceManagerPlugin:
             await callback.answer("无权限", show_alert=True)
             return
         try:
-            _, _, raw_product_id, provider = callback.data.split(":", 3)
-            product_id = uuid.UUID(raw_product_id)
-            if provider not in {"usdt", "balance"}:
-                raise ValueError
+            product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
         except (ValueError, IndexError):
             await callback.answer("参数错误", show_alert=True)
             return
-        await state.update_data(price_product_id=str(product_id), price_provider=provider)
+        await state.update_data(price_product_id=str(product_id))
         await state.set_state(EditPrice.amount)
         await callback.answer()
-        await callback.message.answer("请输入美元价格，例如 4.99；发送 /cancel 取消。")
+        await callback.message.answer(
+            "✏️ 请输入美元售价，例如 4.99。\n保存后 USDT 与账户余额将同时启用；发送 /cancel 取消。"
+        )
 
     async def _finish_edit(self, message: Message, state: FSMContext) -> None:
         if not is_admin(message.from_user.id):
@@ -168,35 +162,18 @@ class PriceManagerPlugin:
         data = await state.get_data()
         try:
             product_id = uuid.UUID(data["price_product_id"])
-            provider = data["price_provider"]
             decimal_amount = Decimal((message.text or "").strip())
             if not decimal_amount.is_finite() or decimal_amount <= 0:
                 raise ValueError
             amount = int((decimal_amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            metadata = {"pricing": "manual_protected"}
             async with SessionFactory() as session:
-                await set_product_plugin_price(
+                await set_product_usd_price(
                     session,
                     product_id=product_id,
-                    provider=provider,
-                    currency="USD",
                     amount_minor=amount,
+                    metadata_json=metadata,
                 )
-            if provider == "usdt":
-                async with SessionFactory() as session, session.begin():
-                    sku = await session.scalar(
-                        select(SKU).where(SKU.product_id == product_id, SKU.is_default.is_(True))
-                    )
-                    price = await session.scalar(
-                        select(ProductPrice).where(
-                            ProductPrice.sku_id == sku.id,
-                            ProductPrice.provider == "usdt",
-                        )
-                    )
-                    if price is not None:
-                        price.metadata_json = {
-                            **(price.metadata_json or {}),
-                            "pricing": "manual_protected",
-                        }
             async with SessionFactory() as session, session.begin():
                 await record_admin_action(
                     session,
@@ -204,20 +181,19 @@ class PriceManagerPlugin:
                     action="product_price_set",
                     target_type="product",
                     target_id=str(product_id),
-                    details={"provider": provider, "amount_minor": amount},
+                    details={"providers": ["usdt", "balance"], "amount_minor": amount},
                 )
         except (KeyError, ValueError, InvalidOperation, ProductPriceError):
-            await message.answer("价格格式无效，请重新输入。")
+            await message.answer("❌ 价格格式无效，请重新输入。")
             return
         await state.clear()
         await message.answer(
-            "✅ 价格已更新。",
+            "✅ 美元售价已更新，USDT 与余额支付均已启用。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="返回商品价格",
-                            callback_data=f"pp:p:{product_id}",
+                            text="⬅️ 返回商品定价", callback_data=f"pp:p:{product_id}"
                         )
                     ]
                 ]
@@ -229,21 +205,12 @@ class PriceManagerPlugin:
             await callback.answer("无权限", show_alert=True)
             return
         try:
-            _, _, raw_product_id, provider = callback.data.split(":", 3)
-            product_id = uuid.UUID(raw_product_id)
-            if provider not in {"usdt", "balance"}:
-                raise ValueError
+            product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
         except (ValueError, IndexError):
             await callback.answer("参数错误", show_alert=True)
             return
         async with SessionFactory() as session:
-            await set_product_plugin_price(
-                session,
-                product_id=product_id,
-                provider=provider,
-                currency="USD",
-                amount_minor=None,
-            )
+            await set_product_usd_price(session, product_id=product_id, amount_minor=None)
         async with SessionFactory() as session, session.begin():
             await record_admin_action(
                 session,
@@ -251,17 +218,16 @@ class PriceManagerPlugin:
                 action="product_price_disable",
                 target_type="product",
                 target_id=str(product_id),
-                details={"provider": provider},
+                details={"providers": ["usdt", "balance"]},
             )
         await callback.answer("已停用", show_alert=True)
         await callback.message.answer(
-            "✅ 价格已停用。",
+            "⏸ USDT 与余额支付均已停用。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="返回商品价格",
-                            callback_data=f"pp:p:{product_id}",
+                            text="⬅️ 返回商品定价", callback_data=f"pp:p:{product_id}"
                         )
                     ]
                 ]

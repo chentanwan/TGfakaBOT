@@ -18,11 +18,10 @@ def test_admin_menu_exposes_price_settings() -> None:
 
 def test_price_manager_only_exposes_usd_price_types() -> None:
     source = Path("plugins/price_manager/plugin.py").read_text()
-    assert 'provider not in {"usdt", "balance"}' in source
     assert "设置 Stars" not in source
     assert "sku.price_xtr = amount" not in source
-    assert "set_product_plugin_price(" in source
-    assert 'currency="USD"' in source
+    assert "set_product_usd_price(" in source
+    assert "USDT 与余额" in source
     assert 'action="product_price_set"' in source
     assert 'action="product_price_disable"' in source
 
