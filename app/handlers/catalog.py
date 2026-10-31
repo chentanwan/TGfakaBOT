@@ -880,6 +880,7 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         variants = await list_product_variants(session, product.id)
     rows = []
+    language = await _user_language(callback.from_user.id)
     available = product.stock > 0 or product.supplier_stock
     if len(variants) > 1:
         for variant in variants:
@@ -937,6 +938,27 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
             button = plugin.catalog_button(plugin_product)
             if button is not None:
                 rows.append([button])
+    if not available:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔴 暂时缺货" if language == "zh" else "🔴 Out of stock",
+                    callback_data="shop:unavailable",
+                    style="danger",
+                )
+            ]
+        )
+    elif "usdt" not in product.plugin_prices and product.balance_price_minor is None:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⚠️ 暂无可用支付方式"
+                    if language == "zh"
+                    else "⚠️ No payment method available",
+                    callback_data="shop:unavailable",
+                )
+            ]
+        )
     raw_category = str(product.category_id) if product.category_id else "all"
     rows.append(
         [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:category:{raw_category}")]
@@ -948,6 +970,17 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
         f"💵 Price: {_product_price(product)}\n"
         f"⚡ Delivery: {delivery}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data == "shop:unavailable")
+async def unavailable_purchase(callback: CallbackQuery) -> None:
+    language = await _user_language(callback.from_user.id)
+    await callback.answer(
+        "该商品当前缺货或没有可用支付方式。"
+        if language == "zh"
+        else "This product is out of stock or has no available payment method.",
+        show_alert=True,
     )
 
 

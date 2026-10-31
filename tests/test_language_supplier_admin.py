@@ -52,6 +52,14 @@ def test_admin_home_only_contains_daily_operations() -> None:
         assert callback not in block
 
 
+def test_product_detail_always_explains_purchase_availability() -> None:
+    source = Path("app/handlers/catalog.py").read_text()
+    assert 'callback_data="shop:unavailable"' in source
+    assert '@router.callback_query(F.data == "shop:unavailable")' in source
+    assert "暂无可用支付方式" in source
+    assert "暂时缺货" in source
+
+
 def test_safe_supplier_prices_are_restored_for_purchase() -> None:
     migration = Path("migrations/versions/81b972e6c4ad_restore_safe_supplier_prices.py").read_text()
     plugin = Path("plugins/prodseller/plugin.py").read_text()
