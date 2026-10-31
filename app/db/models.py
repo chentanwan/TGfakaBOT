@@ -345,6 +345,23 @@ class Setting(TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
+class UsdtTransactionClaim(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "usdt_transaction_claims"
+    __table_args__ = (
+        UniqueConstraint("network", "transaction_id", name="uq_usdt_claim_network_tx"),
+        UniqueConstraint("source_type", "source_id", name="uq_usdt_claim_source"),
+    )
+
+    network: Mapped[str] = mapped_column(String(40), nullable=False)
+    transaction_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    destination: Mapped[str] = mapped_column(String(255), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="reserved", nullable=False)
+    evidence: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class BalanceTopup(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "balance_topups"
     __table_args__ = (
@@ -357,6 +374,8 @@ class BalanceTopup(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     method: Mapped[str] = mapped_column(String(40), nullable=False)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     proof: Mapped[str] = mapped_column(String(255), nullable=False)
+    destination: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    initiated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reviewed_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)

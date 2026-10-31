@@ -230,7 +230,7 @@ async def admin_product_list(callback: CallbackQuery) -> None:
     rows.append(
         [
             InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new"),
-            InlineKeyboardButton(text="« 管理后台", callback_data="adm:home"),
+            InlineKeyboardButton(text="⬅️ 管理后台", callback_data="adm:home"),
         ]
     )
     await callback.message.answer(
@@ -351,16 +351,28 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
         await callback.answer("无权限", show_alert=True)
         return
     from app.services.payment_settings import list_payment_methods
-    from app.services.usdt_verification import automatic_verification_available
+    from app.services.usdt_verification import (
+        automatic_verification_available,
+        automatic_verification_configured,
+    )
 
     await callback.answer()
     async with SessionFactory() as session:
         methods = await list_payment_methods(session, settings)
+    configured_count = sum(
+        automatic_verification_configured(settings, method.id) for method in methods
+    )
+    active_count = sum(method.available for method in methods)
     lines = [
         "⚙️ <b>支付设置</b>",
-        f"\n自动核验总开关：{'开启' if settings.usdt_auto_verify_enabled else '关闭'}",
-        f"\nEVM 确认数：{settings.usdt_evm_confirmations}",
-        f" · TRON 确认数：{settings.usdt_tron_confirmations}",
+        f"\n\n💳 已启用渠道：{active_count}/{len(methods)}",
+        f"\n🤖 自动核验：{'✅ 已开启' if settings.usdt_auto_verify_enabled else '⛔ 已关闭'}",
+        f" · 已配置网络：{configured_count}",
+        f"\n⏱ 轮询：{settings.usdt_verify_poll_seconds} 秒",
+        f" · 超时：{settings.usdt_verify_timeout_seconds} 秒",
+        f"\n🔗 EVM 确认：{settings.usdt_evm_confirmations}",
+        f" · TRON 确认：{settings.usdt_tron_confirmations}",
+        "\n\n点击支付方式可编辑收款地址、最低金额及启停状态。",
     ]
     method_buttons = []
     for method in methods:
@@ -370,9 +382,8 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
         )
         lines.append(
             f"\n\n<b>{html.escape(method.label)}</b>"
-            f"\n状态：{'✅ 开启' if method.enabled else '⛔ 关闭'}"
-            f" · 显示：{'是' if method.available else '否'}"
-            f" · 自动核验：{'可用' if auto_verify else '不可用'}"
+            f"\n渠道：{'✅ 可用' if method.available else '⛔ 停用'}"
+            f" · 核验：{'🤖 自动' if auto_verify else '👤 人工'}"
             f"\n说明：{html.escape(method.description or '未设置')}"
             f"\n最低充值：${method.minimum_topup_minor / 100:.2f}"
             f" · 排序：{method.sort_order}"
@@ -397,6 +408,7 @@ async def payment_method_view(callback: CallbackQuery) -> None:
         await callback.answer("无权限", show_alert=True)
         return
     from app.services.payment_settings import get_payment_method
+    from app.services.usdt_verification import automatic_verification_available
 
     method_id = callback.data.rsplit(":", 1)[1]
     async with SessionFactory() as session:
@@ -424,7 +436,7 @@ async def payment_method_view(callback: CallbackQuery) -> None:
                 callback_data=f"adm:pay:toggle:{method.id}",
                 style="danger" if method.enabled else "success",
             ),
-            InlineKeyboardButton(text="« 支付设置", callback_data="adm:usdt:health"),
+            InlineKeyboardButton(text="⬅️ 支付设置", callback_data="adm:usdt:health"),
         ]
     )
     masked_destination = (
@@ -432,9 +444,13 @@ async def payment_method_view(callback: CallbackQuery) -> None:
         if method.destination
         else "未设置"
     )
+    verification_status = (
+        "🤖 已启用" if automatic_verification_available(settings, method.id) else "👤 人工审核"
+    )
     await callback.message.answer(
         f"<b>{html.escape(method.label)}</b>\n"
-        f"状态：{'开启' if method.enabled else '关闭'}\n"
+        f"渠道状态：{'✅ 可用' if method.available else '⛔ 停用'}\n"
+        f"自动核验：{verification_status}\n"
         f"说明：{html.escape(method.description or '未设置')}\n"
         f"收款信息：<code>{masked_destination}</code>\n"
         f"最低充值：${method.minimum_topup_minor / 100:.2f}\n"

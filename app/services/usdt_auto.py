@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 from aiogram import Bot
 from sqlalchemy import select
@@ -11,15 +12,17 @@ from app.core.config import get_settings
 from app.db.models import BalanceTopup, Order, PluginPayment, User
 from app.db.session import SessionFactory
 from app.plugins.registry import get_plugin_registry
-from app.services.plugin_payments import (
-    PluginDelivery,
-    fulfill_plugin_payment,
-    reject_manual_usdt_payment,
-)
+from app.services.plugin_payments import PluginDelivery, fulfill_plugin_payment
 from app.services.topups import review_topup
+from app.services.usdt_claims import (
+    TransactionAlreadyClaimed,
+    reserve_transaction_claim,
+    update_transaction_claim,
+)
 from app.services.usdt_verification import (
     VerificationError,
     automatic_verification_available,
+    automatic_verification_configured,
     verify_usdt_payment,
 )
 
@@ -51,35 +54,43 @@ async def verify_topup(topup_id) -> AutoVerificationOutcome:
         if topup.status != "pending":
             return AutoVerificationOutcome(topup.status, telegram_user_id=user.telegram_user_id)
         method, proof, amount = topup.method, topup.proof, topup.amount_minor
+        destination = topup.destination
+        initiated_at = topup.initiated_at or topup.created_at
     if not automatic_verification_available(settings, method):
         return AutoVerificationOutcome("unsupported", reason="未配置自动核验接口")
-    from app.services.payment_settings import get_payment_method
-
-    async with SessionFactory() as session:
-        configured_method = await get_payment_method(session, settings, method)
-    destination = configured_method.destination if configured_method else ""
+    if not destination:
+        return AutoVerificationOutcome("manual_review", reason="旧充值记录没有收款地址快照")
+    try:
+        async with SessionFactory() as session, session.begin():
+            await reserve_transaction_claim(
+                session,
+                network=method,
+                transaction_id=proof,
+                source_type="topup",
+                source_id=topup_id,
+                destination=destination,
+                amount_minor=amount,
+            )
+    except TransactionAlreadyClaimed as exc:
+        return AutoVerificationOutcome("manual_review", reason=str(exc))
     result = await verify_usdt_payment(
         settings,
         method_id=method,
         proof=proof,
         destination=destination,
         expected_amount_minor=amount,
+        initiated_at=initiated_at,
     )
-    if result.state == "rejected":
-        async with SessionFactory() as session:
-            record, telegram_user_id, _ = await review_topup(
+    if result.state in {"rejected", "manual_review"}:
+        async with SessionFactory() as session, session.begin():
+            await update_transaction_claim(
                 session,
-                topup_id=topup_id,
-                admin_telegram_id=0,
-                approve=False,
-                rejection_reason=f"Automatic verification: {result.reason}",
+                source_type="topup",
+                source_id=topup_id,
+                status="manual_review",
+                evidence={"reason": result.reason, "confirmations": result.confirmations},
             )
-        return AutoVerificationOutcome(
-            "rejected",
-            telegram_user_id=telegram_user_id,
-            reference=str(record.id),
-            reason=result.reason,
-        )
+        return AutoVerificationOutcome("manual_review", reason=result.reason)
     if result.state != "confirmed":
         return AutoVerificationOutcome(result.state, reason=result.reason)
     async with SessionFactory() as session:
@@ -88,6 +99,14 @@ async def verify_topup(topup_id) -> AutoVerificationOutcome:
             topup_id=topup_id,
             admin_telegram_id=0,
             approve=True,
+        )
+    async with SessionFactory() as session, session.begin():
+        await update_transaction_claim(
+            session,
+            source_type="topup",
+            source_id=topup_id,
+            status="consumed",
+            evidence={"confirmations": result.confirmations, "amount_minor": result.amount_minor},
         )
     return AutoVerificationOutcome(
         "approved" if not duplicate else "approved_duplicate",
@@ -118,29 +137,43 @@ async def verify_order(payment_id) -> AutoVerificationOutcome:
         amount = payment.amount_minor
         public_id = order.public_id
         destination = str(payment.provider_data.get("destination") or "")
+        initiated_raw = payment.provider_data.get("initiated_at")
+        initiated_at = (
+            datetime.fromisoformat(str(initiated_raw)) if initiated_raw else payment.created_at
+        )
     if not automatic_verification_available(settings, method):
         return AutoVerificationOutcome("unsupported", reference=public_id)
+    try:
+        async with SessionFactory() as session, session.begin():
+            await reserve_transaction_claim(
+                session,
+                network=method,
+                transaction_id=proof,
+                source_type="order",
+                source_id=payment_id,
+                destination=destination,
+                amount_minor=amount,
+            )
+    except TransactionAlreadyClaimed as exc:
+        return AutoVerificationOutcome("manual_review", reference=public_id, reason=str(exc))
     result = await verify_usdt_payment(
         settings,
         method_id=method,
         proof=proof,
         destination=destination,
         expected_amount_minor=amount,
+        initiated_at=initiated_at,
     )
-    if result.state == "rejected":
-        async with SessionFactory() as session:
-            telegram_user_id, _, _ = await reject_manual_usdt_payment(
+    if result.state in {"rejected", "manual_review"}:
+        async with SessionFactory() as session, session.begin():
+            await update_transaction_claim(
                 session,
-                payment_id=payment_id,
-                admin_telegram_id=0,
-                rejection_reason=f"Automatic verification: {result.reason}",
+                source_type="order",
+                source_id=payment_id,
+                status="manual_review",
+                evidence={"reason": result.reason, "confirmations": result.confirmations},
             )
-        return AutoVerificationOutcome(
-            "rejected",
-            telegram_user_id=telegram_user_id,
-            reference=public_id,
-            reason=result.reason,
-        )
+        return AutoVerificationOutcome("manual_review", reference=public_id, reason=result.reason)
     if result.state != "confirmed":
         return AutoVerificationOutcome(result.state, reference=public_id, reason=result.reason)
     async with SessionFactory() as session:
@@ -152,6 +185,14 @@ async def verify_order(payment_id) -> AutoVerificationOutcome:
             amount_minor=amount,
             event={"type": "automatic_chain_verification", "confirmations": result.confirmations},
             provider_data={"automatically_verified": True, "confirmations": result.confirmations},
+        )
+    async with SessionFactory() as session, session.begin():
+        await update_transaction_claim(
+            session,
+            source_type="order",
+            source_id=payment_id,
+            status="consumed",
+            evidence={"confirmations": result.confirmations, "amount_minor": result.amount_minor},
         )
     return AutoVerificationOutcome("paid", delivery=delivery, reference=public_id)
 
@@ -182,10 +223,18 @@ async def usdt_verification_loop(bot: Bot) -> None:
         try:
             if settings.usdt_auto_verify_enabled:
                 async with SessionFactory() as session:
+                    auto_methods = [
+                        method_id
+                        for method_id in ("usdt_bep20", "usdt_trc20", "usdt_arbitrum")
+                        if automatic_verification_configured(settings, method_id)
+                    ]
                     topup_ids = list(
                         await session.scalars(
                             select(BalanceTopup.id)
-                            .where(BalanceTopup.status == "pending")
+                            .where(
+                                BalanceTopup.status == "pending",
+                                BalanceTopup.method.in_(auto_methods),
+                            )
                             .order_by(BalanceTopup.created_at.asc())
                             .limit(50)
                         )
@@ -195,7 +244,7 @@ async def usdt_verification_loop(bot: Bot) -> None:
                             select(PluginPayment.id)
                             .where(
                                 PluginPayment.status == "proof_pending",
-                                PluginPayment.provider.startswith("usdt_"),
+                                PluginPayment.provider.in_(auto_methods),
                             )
                             .order_by(PluginPayment.created_at.asc())
                             .limit(50)

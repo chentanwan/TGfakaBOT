@@ -28,6 +28,10 @@ async def main() -> None:
         payload = await request.json()
         if payload["method"] == "eth_blockNumber":
             result = hex(state["latest"])
+        elif payload["method"] == "eth_chainId":
+            result = hex(56)
+        elif payload["method"] == "eth_getBlockByNumber":
+            result = {"timestamp": hex(2_000_000_000)}
         else:
             result = {
                 "status": state["evm_status"],
@@ -137,7 +141,7 @@ async def main() -> None:
             destination=destination,
             expected_amount_minor=100,
         )
-        assert result.state == "rejected"
+        assert result.state == "manual_review"
         state["evm_token"] = token
         state["evm_destination"] = "0x" + "d" * 40
         result = await verify_usdt_payment(
@@ -147,7 +151,7 @@ async def main() -> None:
             destination=destination,
             expected_amount_minor=100,
         )
-        assert result.state == "rejected"
+        assert result.state == "manual_review"
         settings.usdt_bep20_rpc_url = "http://127.0.0.1:1/unavailable"
         result = await verify_usdt_payment(
             settings,
@@ -173,7 +177,7 @@ async def main() -> None:
             destination=tron_address,
             expected_amount_minor=100,
         )
-        assert result.state == "rejected"
+        assert result.state == "manual_review"
         state["tron_token"] = tron_hex[2:]
         state["tron_destination"] = "d" * 40
         result = await verify_usdt_payment(
@@ -183,7 +187,7 @@ async def main() -> None:
             destination=tron_address,
             expected_amount_minor=100,
         )
-        assert result.state == "rejected"
+        assert result.state == "manual_review"
         settings.usdt_tron_api_url = "http://127.0.0.1:1/unavailable"
         result = await verify_usdt_payment(
             settings,

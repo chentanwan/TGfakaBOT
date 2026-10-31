@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +28,12 @@ class TopupSummary:
     status: str
     created_at: object
 
+    @property
+    def overdue(self) -> bool:
+        if not isinstance(self.created_at, datetime):
+            return False
+        return datetime.now(UTC) - self.created_at > timedelta(hours=24)
+
 
 async def submit_topup(
     session: AsyncSession,
@@ -36,6 +42,8 @@ async def submit_topup(
     method: str,
     amount_minor: int,
     proof: str,
+    destination: str = "",
+    initiated_at: datetime | None = None,
 ) -> BalanceTopup:
     if method not in ALLOWED_USDT_TOPUP_METHODS:
         raise ValueError("unsupported top-up method")
@@ -54,6 +62,8 @@ async def submit_topup(
                 method=method,
                 amount_minor=amount_minor,
                 proof=proof,
+                destination=destination.strip(),
+                initiated_at=initiated_at,
                 status="pending",
             )
             session.add(record)
@@ -63,9 +73,7 @@ async def submit_topup(
         raise ValueError("this payment proof has already been submitted") from exc
 
 
-async def list_pending_topups(
-    session: AsyncSession, *, limit: int = 20
-) -> list[TopupSummary]:
+async def list_pending_topups(session: AsyncSession, *, limit: int = 20) -> list[TopupSummary]:
     rows = (
         await session.execute(
             select(BalanceTopup, User)
@@ -104,9 +112,7 @@ async def review_topup(
         )
         if record is None:
             raise ValueError("top-up record not found")
-        user = await session.scalar(
-            select(User).where(User.id == record.user_id).with_for_update()
-        )
+        user = await session.scalar(select(User).where(User.id == record.user_id).with_for_update())
         if user is None:
             raise ValueError("account not found")
         if record.status != "pending":
@@ -122,8 +128,11 @@ async def review_topup(
         record.reviewed_by_telegram_id = admin_telegram_id
         if admin_telegram_id:
             await record_admin_action(
-                session, admin_telegram_id=admin_telegram_id, action="topup_review",
-                target_type="balance_topup", target_id=str(record.id),
+                session,
+                admin_telegram_id=admin_telegram_id,
+                action="topup_review",
+                target_type="balance_topup",
+                target_id=str(record.id),
                 details={"approved": approve, "amount_minor": record.amount_minor},
             )
         return record, user.telegram_user_id, False
@@ -143,10 +152,14 @@ async def list_user_topups(
     ).all()
     return [
         TopupSummary(
-            id=record.id, telegram_user_id=user.telegram_user_id,
+            id=record.id,
+            telegram_user_id=user.telegram_user_id,
             display_name=user.display_name or str(user.telegram_user_id),
-            method=record.method, amount_minor=record.amount_minor,
-            proof=record.proof, status=record.status, created_at=record.created_at,
+            method=record.method,
+            amount_minor=record.amount_minor,
+            proof=record.proof,
+            status=record.status,
+            created_at=record.created_at,
         )
         for record, user in rows
     ]

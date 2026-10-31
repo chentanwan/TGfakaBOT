@@ -223,10 +223,10 @@ async def main() -> None:
             order = await session.get(Order, rejected_order)
             card = await session.get(Card, rejected_card)
             payment = await session.get(PluginPayment, rejected_payment)
-            assert order.status == OrderStatus.EXPIRED
-            assert card.status == CardStatus.AVAILABLE
-            assert payment.status == "rejected"
-        assert outcome.state == "rejected"
+            assert order.status == OrderStatus.PENDING_PAYMENT
+            assert card.status == CardStatus.RESERVED
+            assert payment.status == "proof_pending"
+        assert outcome.state == "manual_review"
         print("isolated_usdt_auto_db_ok")
     finally:
         await cleanup()

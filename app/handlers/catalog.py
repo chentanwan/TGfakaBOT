@@ -1,6 +1,7 @@
 import html
 import secrets
 import uuid
+from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -558,6 +559,7 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
         topup_method=method.id,
         topup_destination=method.destination,
         topup_proof_label=method.proof_label,
+        topup_initiated_at=datetime.now(UTC).isoformat(),
     )
     await state.set_state(ManualTopup.amount)
     await callback.message.answer(
@@ -616,6 +618,8 @@ async def manual_topup_proof(message: Message, state: FSMContext) -> None:
                 method=data["topup_method"],
                 amount_minor=int(data["topup_amount_minor"]),
                 proof=message.text or "",
+                destination=str(data.get("topup_destination") or ""),
+                initiated_at=datetime.fromisoformat(str(data["topup_initiated_at"])),
             )
     except (ValueError, KeyError) as exc:
         await message.answer(f"❌ {html.escape(str(exc))}")
@@ -801,6 +805,7 @@ async def create_usdt_purchase(callback: CallbackQuery, state: FSMContext) -> No
                 provider=method.id,
                 provider_data={
                     "destination": method.destination,
+                    "initiated_at": datetime.now(UTC).isoformat(),
                     "method_label": method.label,
                     "proof_label": method.proof_label,
                 },

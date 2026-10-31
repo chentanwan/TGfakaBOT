@@ -6,6 +6,7 @@ from app.services.usdt_verification import (
     VerificationError,
     _amount_minor,
     automatic_verification_available,
+    automatic_verification_configured,
 )
 
 
@@ -21,6 +22,7 @@ class SettingsStub:
 
 def test_automatic_verification_availability_is_channel_specific() -> None:
     settings = SettingsStub()
+    assert automatic_verification_configured(settings, "usdt_bep20")
     assert automatic_verification_available(settings, "usdt_bep20")
     assert automatic_verification_available(settings, "usdt_arbitrum")
     assert automatic_verification_available(settings, "usdt_trc20")
