@@ -74,30 +74,18 @@ def _usd_price(amount_minor: int | None) -> str:
 def admin_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new"),
             InlineKeyboardButton(text="📦 商品库存", callback_data="adm:list"),
-        ],
-        [
             InlineKeyboardButton(text="🏭 供应商", callback_data="adm:suppliers"),
+        ],
+        [
             InlineKeyboardButton(text="💰 价格设置", callback_data="plugin:prices:list"),
+            InlineKeyboardButton(text="⚙️ 支付设置", callback_data="adm:usdt:health"),
         ],
-        [InlineKeyboardButton(text="⚙️ 支付设置", callback_data="adm:usdt:health")],
         [
-            InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list"),
             InlineKeyboardButton(text="₮ USDT 审核", callback_data="adm:usdt:list"),
+            InlineKeyboardButton(text="💳 充值审核", callback_data="adm:topups:list"),
         ],
-        [
-            InlineKeyboardButton(text="👤 用户查询", callback_data="adm:user:find"),
-            InlineKeyboardButton(text="📣 全体广播", callback_data="adm:broadcast"),
-        ],
-        [
-            InlineKeyboardButton(text="⚠️ 支付异常", callback_data="adm:pex:list"),
-            InlineKeyboardButton(text="⏳ 退款处理", callback_data="adm:refunds:pending"),
-        ],
-        [
-            InlineKeyboardButton(text="🧾 孤立支付流水", callback_data="adm:charges:list"),
-            InlineKeyboardButton(text="🛡 管理员管理", callback_data="plugin:adminmgr:list"),
-        ],
+        [InlineKeyboardButton(text="🛡 管理员管理", callback_data="plugin:adminmgr:list")],
     ]
     for plugin in get_plugin_registry().plugins:
         rows.extend(plugin.admin_home_buttons())

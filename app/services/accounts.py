@@ -38,7 +38,7 @@ async def ensure_account(
     telegram_language: str | None,
     referral_code: str | None = None,
 ) -> User:
-    language = normalize_language(telegram_language)
+    language = "zh"
     generated_code = f"REF_{telegram_user_id}"
     async with session.begin():
         await session.execute(
@@ -76,9 +76,7 @@ async def get_account(session: AsyncSession, telegram_user_id: int) -> AccountSu
     user = await session.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
     if user is None:
         return None
-    order_count = await session.scalar(
-        select(func.count(Order.id)).where(Order.user_id == user.id)
-    )
+    order_count = await session.scalar(select(func.count(Order.id)).where(Order.user_id == user.id))
     referral_count = await session.scalar(
         select(func.count(User.id)).where(User.referred_by_user_id == user.id)
     )
@@ -258,9 +256,7 @@ async def purchase_with_balance(
             reward = total * max(0, get_settings().referral_reward_percent) // 100
             if reward:
                 referrer = await session.scalar(
-                    select(User)
-                    .where(User.id == user.referred_by_user_id)
-                    .with_for_update()
+                    select(User).where(User.id == user.referred_by_user_id).with_for_update()
                 )
                 if referrer is not None:
                     referrer.balance_minor += reward

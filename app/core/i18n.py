@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SUPPORTED_LANGUAGES = ("en", "fr", "ar", "ru", "zh", "es", "id")
+SUPPORTED_LANGUAGES = ("zh", "en")
 LANGUAGE_NAMES = {
     "en": "🇬🇧 English",
     "fr": "🇫🇷 Français",
@@ -238,11 +238,11 @@ for _language, _messages in WORKFLOW_MESSAGES.items():
     MESSAGES[_language].update(_messages)
 
 
-def normalize_language(language_code: str | None, fallback: str = "en") -> str:
+def normalize_language(language_code: str | None, fallback: str = "zh") -> str:
     candidate = (language_code or "").split("-", 1)[0].lower()
     if candidate in SUPPORTED_LANGUAGES:
         return candidate
-    return fallback if fallback in SUPPORTED_LANGUAGES else "en"
+    return fallback if fallback in SUPPORTED_LANGUAGES else "zh"
 
 
 def text(language: str, key: str, **values: object) -> str:

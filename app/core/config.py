@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     bot_token: str
     admin_ids: tuple[int, ...] = ()
-    bot_language: str = "en"
+    bot_language: str = "zh"
     bot_username: str = ""
     brand_name: str = "TGfakaBOT"
     channel_handle: str = "@channel"

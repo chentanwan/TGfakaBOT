@@ -52,7 +52,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     username: Mapped[str | None] = mapped_column(String(64))
     display_name: Mapped[str | None] = mapped_column(String(128))
-    language_code: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
+    language_code: Mapped[str] = mapped_column(String(10), default="zh", nullable=False)
     balance_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     points: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     tier: Mapped[str] = mapped_column(String(32), default="bronze", nullable=False)

@@ -473,19 +473,15 @@ async def account_referral(callback: CallbackQuery) -> None:
 async def choose_language(callback: CallbackQuery) -> None:
     await callback.answer()
     rows = []
-    codes = list(LANGUAGE_NAMES)
-    for index in range(0, 6, 2):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=LANGUAGE_NAMES[code], callback_data=f"account:setlang:{code}"
-                )
-                for code in codes[index : index + 2]
-            ]
-        )
+    rows = [
+        [
+            InlineKeyboardButton(text=LANGUAGE_NAMES[code], callback_data=f"account:setlang:{code}")
+            for code in ("zh", "en")
+        ]
+    ]
     async with SessionFactory() as session:
         account = await get_account(session, callback.from_user.id)
-    language = account.language_code if account else "en"
+    language = account.language_code if account else "zh"
     rows.append([InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")])
     await callback.message.answer(
         text(language, "choose_language"),

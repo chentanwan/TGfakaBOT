@@ -456,25 +456,20 @@ class ProdsellerPlugin:
                 ),
             )
             return
-        lines = [f"🛍 <b>ProdSeller 商品 · 共 {len(products)} 个</b>"]
+        lines = [f"🛍 <b>ProdSeller 商品 · 共 {len(products)} 个</b>", "点击商品直接导入："]
         rows = []
-        for index, item in enumerate(products, start=1):
+        for item in products:
             cost_minor = self._minor(item["price"])
             sale_minor = self._sale_price(cost_minor)
-            stock = "有货" if item["inStock"] else "缺货"
-            display_name = html.escape(item["name"][:30])
-            lines.append(
-                f"{index}. <b>{display_name}</b> · "
-                f"${cost_minor / 100:.2f}→${sale_minor / 100:.2f} · {stock}"
-            )
+            stock = "🟢" if item["inStock"] else "🔴"
             mapped = item["id"] in mapped_ids
+            state = "✅" if mapped else "➕"
             rows.append(
                 [
                     InlineKeyboardButton(
                         text=(
-                            f"✅ 已接入 {item['name'][:16]}"
-                            if mapped
-                            else f"➕ 导入 {item['name'][:16]}"
+                            f"{state} {item['name'][:26]} | "
+                            f"${cost_minor / 100:.2f}→${sale_minor / 100:.2f} | {stock}"
                         ),
                         callback_data=(
                             "adm:list" if mapped else f"plugin:prodseller:add:{item['id']}"
@@ -1583,6 +1578,8 @@ class ProdsellerPlugin:
                         **(price.metadata_json or {}),
                         "minimum_safe_minor": required_sale,
                     }
+                    if pricing_mode in {"auto_markup", "manual_protected"}:
+                        price.is_active = bool(remote["inStock"])
                     mapping.suspended_for_profit = False
                     mapping.suspension_reason = None
                 updated += 1
