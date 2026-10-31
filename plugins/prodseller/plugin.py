@@ -3,7 +3,7 @@ import html
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_CEILING, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, Decimal
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -53,10 +53,6 @@ class CustomPrice(StatesGroup):
     amount = State()
 
 
-class AutoPricing(StatesGroup):
-    value = State()
-
-
 class RoutingPriority(StatesGroup):
     value = State()
 
@@ -87,7 +83,7 @@ class ProdsellerPlugin:
         )
         self.router.callback_query.register(self._audit_detail, F.data.startswith("ps:a:"))
         self.router.callback_query.register(self._choose_auto_pricing, F.data.startswith("ps:g:"))
-        self.router.callback_query.register(self._start_auto_pricing, F.data.startswith("ps:ap:"))
+        self.router.callback_query.register(self._apply_auto_pricing, F.data.startswith("ps:ap:"))
         self.router.callback_query.register(self._mapping_detail, F.data.startswith("ps:m:"))
         self.router.callback_query.register(self._start_mapping, F.data.startswith("ps:map:"))
         self.router.callback_query.register(self._sync_mapping, F.data.startswith("ps:s:"))
@@ -110,7 +106,6 @@ class ProdsellerPlugin:
         self.router.message.register(self._finish_mapping, MapProduct.external_id)
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
         self.router.message.register(self._save_custom_price, CustomPrice.amount)
-        self.router.message.register(self._save_auto_pricing, AutoPricing.value)
         self.router.message.register(self._save_routing_priority, RoutingPriority.value)
         self._bot: Bot | None = None
         self._poll_task: asyncio.Task | None = None
@@ -1165,7 +1160,7 @@ class ProdsellerPlugin:
                 raise ValueError("商品不存在")
             return sku.product_id
 
-    async def _start_auto_pricing(self, callback: CallbackQuery, state: FSMContext) -> None:
+    async def _apply_auto_pricing(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
             return
@@ -1173,29 +1168,6 @@ class ProdsellerPlugin:
             _, _, mode, raw_mapping_id = callback.data.split(":", 3)
             mapping_id = uuid.UUID(raw_mapping_id)
             if mode not in {"f", "p"}:
-                raise ValueError
-        except (ValueError, IndexError):
-            await callback.answer("参数错误", show_alert=True)
-            return
-        await state.update_data(auto_mapping_id=str(mapping_id), auto_pricing_mode=mode)
-        await state.set_state(AutoPricing.value)
-        await callback.answer()
-        prompt = (
-            "💵 请输入每件固定利润（USD），例如 1.50"
-            if mode == "f"
-            else "📈 请输入利润比例，例如 20 表示 20%"
-        )
-        await callback.message.answer(f"{prompt}；发送 /cancel 取消。")
-
-    async def _save_auto_pricing(self, message: Message, state: FSMContext) -> None:
-        if not self._is_admin(message.from_user.id):
-            return
-        try:
-            data = await state.get_data()
-            mapping_id = uuid.UUID(data["auto_mapping_id"])
-            mode = data["auto_pricing_mode"]
-            value = Decimal((message.text or "").strip())
-            if not value.is_finite() or value < 0:
                 raise ValueError
             async with SessionFactory() as session, session.begin():
                 mapping = await session.scalar(
@@ -1216,12 +1188,14 @@ class ProdsellerPlugin:
                 if price is None:
                     raise ValueError("销售价格不存在")
                 if mode == "f":
+                    value = self.settings.prodseller_profit_fixed
                     fixed_minor = int((value * 100).to_integral_value(rounding=ROUND_CEILING))
                     sale_minor = mapping.cost_amount_minor + fixed_minor
                     pricing = "auto_fixed"
                     metadata = {"profit_fixed_minor": fixed_minor}
                     label = f"固定利润 ${fixed_minor / 100:.2f}"
                 else:
+                    value = self.settings.prodseller_profit_percent
                     sale_minor = int(
                         (
                             Decimal(mapping.cost_amount_minor)
@@ -1265,11 +1239,11 @@ class ProdsellerPlugin:
                 balance.metadata_json = common
                 mapping.suspended_for_profit = False
                 mapping.suspension_reason = None
-        except (KeyError, ValueError, InvalidOperation) as exc:
-            await message.answer(f"❌ {html.escape(str(exc) or '利润设置无效')}")
+        except (ValueError, IndexError) as exc:
+            await callback.answer(str(exc) or "参数错误", show_alert=True)
             return
-        await state.clear()
-        await message.answer(f"✅ 已启用{label}，当前售价 ${sale_minor / 100:.2f}。")
+        await callback.answer("自动定价已启用", show_alert=True)
+        await callback.message.answer(f"✅ 已启用{label}，当前售价 ${sale_minor / 100:.2f}。")
 
     async def _start_custom_price(self, callback: CallbackQuery, state: FSMContext) -> None:
         if not self._is_admin(callback.from_user.id):
