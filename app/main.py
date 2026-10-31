@@ -9,7 +9,7 @@ from aiogram.types import BotCommand
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
-from app.handlers import admin, catalog, charge_admin, payment_admin
+from app.handlers import admin, catalog, charge_admin, fallback, payment_admin
 from app.plugins import configure_plugins
 from app.plugins.http import start_plugin_http_server
 from app.services.admin_access import refresh_admin_cache
@@ -36,6 +36,7 @@ async def main() -> None:
     for plugin in plugin_registry.plugins:
         if plugin.router is not None:
             dispatcher.include_router(plugin.router)
+    dispatcher.include_router(fallback.router)
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Open the main menu"),

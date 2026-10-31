@@ -30,7 +30,6 @@ class ReconcileLinkedRefund(StatesGroup):
     evidence = State()
 
 
-
 def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="« 管理后台", callback_data=callback_data)]]
@@ -143,7 +142,7 @@ async def ask_action(callback: CallbackQuery) -> None:
                 [
                     InlineKeyboardButton(
                         text=f"确认{label}",
-                        callback_data=f"adm:pex:do:{action}:{order_id}:{token}",
+                        callback_data=f"px:d:{action}:{order_id}:{token}",
                     ),
                     InlineKeyboardButton(text="取消", callback_data="adm:pex:cancel"),
                 ]
@@ -160,13 +159,13 @@ async def cancel_action(callback: CallbackQuery) -> None:
     await callback.message.edit_reply_markup(reply_markup=None)
 
 
-@router.callback_query(F.data.startswith("adm:pex:do:"))
+@router.callback_query(F.data.startswith("px:d:"))
 async def confirm_action(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
-        _, _, _, action, raw_order_id, token = callback.data.split(":", 5)
+        _, _, action, raw_order_id, token = callback.data.split(":", 4)
         order_id = uuid.UUID(raw_order_id)
         ACTION_LABELS[action]
     except (ValueError, KeyError):

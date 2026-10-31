@@ -81,41 +81,25 @@ class ProdsellerPlugin:
         self.router.callback_query.register(
             self._exceptions, F.data.startswith("plugin:prodseller:exceptions:")
         )
-        self.router.callback_query.register(
-            self._audit_detail, F.data.startswith("plugin:prodseller:audit:")
-        )
-        self.router.callback_query.register(
-            self._apply_suggested_price, F.data.startswith("plugin:prodseller:suggest:")
-        )
-        self.router.callback_query.register(
-            self._mapping_detail, F.data.startswith("plugin:prodseller:mapping:")
-        )
-        self.router.callback_query.register(
-            self._start_mapping, F.data.startswith("plugin:prodseller:map:")
-        )
-        self.router.callback_query.register(
-            self._sync_mapping, F.data.startswith("plugin:prodseller:syncmapping:")
-        )
-        self.router.callback_query.register(
-            self._toggle_mapping, F.data.startswith("plugin:prodseller:togglemapping:")
-        )
+        self.router.callback_query.register(self._audit_detail, F.data.startswith("ps:a:"))
+        self.router.callback_query.register(self._apply_suggested_price, F.data.startswith("ps:g:"))
+        self.router.callback_query.register(self._mapping_detail, F.data.startswith("ps:m:"))
+        self.router.callback_query.register(self._start_mapping, F.data.startswith("ps:map:"))
+        self.router.callback_query.register(self._sync_mapping, F.data.startswith("ps:s:"))
+        self.router.callback_query.register(self._toggle_mapping, F.data.startswith("ps:t:"))
         self.router.callback_query.register(
             self._start_routing_priority,
-            F.data.startswith("plugin:prodseller:priority:"),
+            F.data.startswith("ps:p:"),
         )
-        self.router.callback_query.register(
-            self._start_custom_price, F.data.startswith("plugin:prodseller:custom:")
-        )
-        self.router.callback_query.register(
-            self._recover_query, F.data.startswith("plugin:prodseller:recover:")
-        )
+        self.router.callback_query.register(self._start_custom_price, F.data.startswith("ps:c:"))
+        self.router.callback_query.register(self._recover_query, F.data.startswith("ps:r:"))
         self.router.callback_query.register(
             self._recovery_candidates,
-            F.data.startswith("plugin:prodseller:candidates:"),
+            F.data.startswith("ps:cs:"),
         )
         self.router.callback_query.register(
             self._select_recovery_candidate,
-            F.data.startswith("plugin:prodseller:selectcandidate:"),
+            F.data.startswith("ps:sc:"),
         )
         self.router.message.register(self._finish_import, ImportProduct.external_id)
         self.router.message.register(self._finish_mapping, MapProduct.external_id)
@@ -132,7 +116,7 @@ class ProdsellerPlugin:
     def admin_product_button(self, product_id: uuid.UUID) -> InlineKeyboardButton | None:
         return InlineKeyboardButton(
             text="🔌 ProdSeller 映射",
-            callback_data=f"plugin:prodseller:mapping:{product_id}",
+            callback_data=f"ps:m:{product_id}",
         )
 
     def admin_home_buttons(self) -> list[list[InlineKeyboardButton]]:
@@ -597,7 +581,7 @@ class ProdsellerPlugin:
                 [
                     InlineKeyboardButton(
                         text=f"📋 详情 {item.public_id}",
-                        callback_data=f"plugin:prodseller:audit:{item.id}",
+                        callback_data=f"ps:a:{item.id}",
                     )
                 ]
             )
@@ -605,11 +589,11 @@ class ProdsellerPlugin:
                 [
                     InlineKeyboardButton(
                         text="🔎 查询恢复",
-                        callback_data=f"plugin:prodseller:recover:{item.id}",
+                        callback_data=f"ps:r:{item.id}",
                     ),
                     InlineKeyboardButton(
                         text="🧩 候选订单",
-                        callback_data=f"plugin:prodseller:candidates:{item.id}",
+                        callback_data=f"ps:cs:{item.id}",
                     ),
                 ]
             )
@@ -709,20 +693,18 @@ class ProdsellerPlugin:
 
         lines = ["🧩 <b>上游订单候选</b>", f"本地订单：<code>{context.public_id}</code>"]
         rows = []
-        for order in candidates[:10]:
+        for index, order in enumerate(candidates[:10]):
             created = html.escape(str(order.get("createdAt") or "未知"))
             lines.append(
-                f"\n<code>{html.escape(order['orderId'])}</code> · {order['status']}\n"
+                f"\n{index + 1}. <code>{html.escape(order['orderId'])}</code> · "
+                f"{order['status']}\n"
                 f"数量 {order['quantity']} · ${order['amount']:.2f} · {created}"
             )
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=f"选择 {order['orderId'][:12]}",
-                        callback_data=(
-                            f"plugin:prodseller:selectcandidate:{supplier_order_id}:"
-                            f"{order['orderId']}"
-                        ),
+                        text=f"选择 {index + 1} · {order['orderId'][:10]}",
+                        callback_data=f"ps:sc:{supplier_order_id}:{index}",
                         style="danger",
                     )
                 ]
@@ -738,13 +720,38 @@ class ProdsellerPlugin:
             await callback.answer("无权限", show_alert=True)
             return
         try:
-            prefix = "plugin:prodseller:selectcandidate:"
-            supplier_raw, external_order_id = callback.data[len(prefix) :].split(":", 1)
+            prefix = "ps:sc:"
+            supplier_raw, raw_index = callback.data[len(prefix) :].split(":", 1)
             supplier_order_id = uuid.UUID(supplier_raw)
+            candidate_index = int(raw_index)
+            if candidate_index < 0 or candidate_index >= 10:
+                raise ValueError
         except (ValueError, IndexError):
             await callback.answer("参数错误", show_alert=True)
             return
-        response = await self.client.get_order(external_order_id)
+        await callback.answer("核验中…")
+        async with SessionFactory() as session:
+            supplier_order = await session.get(SupplierOrder, supplier_order_id)
+            if supplier_order is None:
+                await callback.message.answer("❌ 本地供货订单不存在。")
+                return
+            context = await get_supplier_purchase_context(
+                session, order_id=supplier_order.order_id, provider=PROVIDER
+            )
+        if context is None:
+            await callback.message.answer("❌ 找不到本地采购上下文。")
+            return
+        history = await self.client.list_orders(page=1, limit=200)
+        candidates = self._reconciliation_candidates(
+            context=context,
+            supplier_created_at=supplier_order.created_at,
+            orders=history["orders"],
+        )
+        if candidate_index >= len(candidates):
+            await callback.message.answer("❌ 候选列表已变化，请重新打开候选订单。")
+            return
+        response = candidates[candidate_index]
+        external_order_id = response["orderId"]
         async with SessionFactory() as session:
             supplier_order = await record_supplier_recovery(
                 session,
@@ -752,12 +759,6 @@ class ProdsellerPlugin:
                 admin_telegram_id=callback.from_user.id,
                 note=f"管理员从候选订单中确认上游订单 {external_order_id}",
             )
-            context = await get_supplier_purchase_context(
-                session, order_id=supplier_order.order_id, provider=PROVIDER
-            )
-        if context is None:
-            await callback.answer("找不到本地采购上下文", show_alert=True)
-            return
         candidates = self._reconciliation_candidates(
             context=context,
             supplier_created_at=supplier_order.created_at,
@@ -775,7 +776,6 @@ class ProdsellerPlugin:
         )
         if response["status"] == "delivered":
             await self._deliver_recovered_order(context.order_id, response)
-        await callback.answer("候选已绑定", show_alert=True)
         await callback.message.answer(
             f"✅ 已绑定上游订单 <code>{html.escape(response['orderId'])}</code>，"
             f"状态：{html.escape(response['status'])}"
@@ -891,7 +891,7 @@ class ProdsellerPlugin:
                         [
                             InlineKeyboardButton(
                                 text="🔗 输入上游商品 ID",
-                                callback_data=f"plugin:prodseller:map:{product_id}",
+                                callback_data=f"ps:map:{product_id}",
                             )
                         ],
                         [InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")],
@@ -928,28 +928,28 @@ class ProdsellerPlugin:
                     [
                         InlineKeyboardButton(
                             text="🔄 立即同步",
-                            callback_data=f"plugin:prodseller:syncmapping:{mapping.id}",
+                            callback_data=f"ps:s:{mapping.id}",
                         ),
                         InlineKeyboardButton(
                             text="⏯ 切换映射",
-                            callback_data=f"plugin:prodseller:togglemapping:{mapping.id}",
+                            callback_data=f"ps:t:{mapping.id}",
                             style="danger",
                         ),
                     ],
                     [
                         InlineKeyboardButton(
                             text="📈 自动跟价",
-                            callback_data=f"plugin:prodseller:suggest:{mapping.id}",
+                            callback_data=f"ps:g:{mapping.id}",
                         ),
                         InlineKeyboardButton(
                             text="✏️ 手动定价",
-                            callback_data=f"plugin:prodseller:custom:{mapping.id}",
+                            callback_data=f"ps:c:{mapping.id}",
                         ),
                     ],
                     [
                         InlineKeyboardButton(
                             text="🔢 设置路由优先级",
-                            callback_data=f"plugin:prodseller:priority:{mapping.id}",
+                            callback_data=f"ps:p:{mapping.id}",
                         )
                     ],
                     [InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")],
@@ -1000,9 +1000,7 @@ class ProdsellerPlugin:
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(
-                            text="查看映射", callback_data=f"plugin:prodseller:mapping:{product_id}"
-                        ),
+                        InlineKeyboardButton(text="查看映射", callback_data=f"ps:m:{product_id}"),
                         InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list"),
                     ]
                 ]
@@ -1608,11 +1606,11 @@ class ProdsellerPlugin:
                     [
                         InlineKeyboardButton(
                             text=f"✅ 使用 ${suggested / 100:.2f}",
-                            callback_data=f"plugin:prodseller:suggest:{mapping_id}",
+                            callback_data=f"ps:g:{mapping_id}",
                         ),
                         InlineKeyboardButton(
                             text="✏️ 自定义售价",
-                            callback_data=f"plugin:prodseller:custom:{mapping_id}",
+                            callback_data=f"ps:c:{mapping_id}",
                         ),
                     ]
                 ]

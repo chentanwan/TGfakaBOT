@@ -299,7 +299,7 @@ async def send_balance_confirmation(
             [
                 InlineKeyboardButton(
                     text="🛒 Buy now",
-                    callback_data=f"balance:buy:{sku.id}:{quantity}:{token}",
+                    callback_data=f"bb:{sku.id}:{quantity}:{token}",
                     style="success",
                 )
             ]
@@ -325,11 +325,11 @@ async def send_balance_confirmation(
     )
 
 
-@router.callback_query(F.data.startswith("balance:buy:"))
+@router.callback_query(F.data.startswith("bb:"))
 async def execute_balance_purchase(callback: CallbackQuery) -> None:
     await callback.answer("Processing…")
     try:
-        _, _, raw_sku, raw_quantity, token = callback.data.split(":", 4)
+        _, raw_sku, raw_quantity, token = callback.data.split(":", 3)
         sku_id = uuid.UUID(raw_sku)
         quantity = int(raw_quantity)
         idempotency_key = f"balance:{callback.from_user.id}:{token}"
@@ -486,9 +486,6 @@ async def choose_language(callback: CallbackQuery) -> None:
                 for code in codes[index : index + 2]
             ]
         )
-    rows.append(
-        [InlineKeyboardButton(text=LANGUAGE_NAMES["id"], callback_data="account:setlang:id")]
-    )
     async with SessionFactory() as session:
         account = await get_account(session, callback.from_user.id)
     language = account.language_code if account else "en"
@@ -739,10 +736,10 @@ async def send_products(
     )
 
 
-@router.callback_query(F.data.startswith("usdt:confirm:"))
+@router.callback_query(F.data.startswith("uc:"))
 async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
     try:
-        _, _, method_id, raw_product_id = callback.data.split(":", 3)
+        _, method_id, raw_product_id = callback.data.split(":", 2)
         product_id = uuid.UUID(raw_product_id)
     except (ValueError, IndexError):
         await callback.answer("Invalid payment request.", show_alert=True)
@@ -770,7 +767,7 @@ async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
                 [
                     InlineKeyboardButton(
                         text="✅ Create payment order",
-                        callback_data=f"usdt:create:{method.id}:{product.id}",
+                        callback_data=f"uo:{method.id}:{product.id}",
                     )
                 ],
                 [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:product:{product.id}")],
@@ -779,10 +776,10 @@ async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("usdt:create:"))
+@router.callback_query(F.data.startswith("uo:"))
 async def create_usdt_purchase(callback: CallbackQuery, state: FSMContext) -> None:
     try:
-        _, _, method_id, raw_product_id = callback.data.split(":", 3)
+        _, method_id, raw_product_id = callback.data.split(":", 2)
         product_id = uuid.UUID(raw_product_id)
     except (ValueError, IndexError):
         await callback.answer("Invalid payment request.", show_alert=True)
@@ -939,7 +936,7 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
                 [
                     InlineKeyboardButton(
                         text=f"{method.label} · ${usdt_amount / 100:.2f}",
-                        callback_data=f"usdt:confirm:{method.id}:{product.id}",
+                        callback_data=f"uc:{method.id}:{product.id}",
                     )
                 ]
             )

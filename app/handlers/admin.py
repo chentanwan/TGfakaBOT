@@ -219,25 +219,20 @@ async def admin_product_list(callback: CallbackQuery) -> None:
         await callback.message.answer("暂无商品。", reply_markup=admin_keyboard())
         return
     rows = []
-    lines = ["📦 <b>商品与库存</b>"]
+    lines = ["📦 <b>商品与库存</b>", "\n请选择商品查看库存和管理操作："]
     for product in products:
         icon = "✅" if product.status == "active" else "⏸"
-        lines.append(
-            f"\n{icon} <b>{html.escape(product.name)}</b> · "
-            f"⭐ {product.price_xtr} · 库存 {product.available}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{icon} {product.name[:22]} · ⭐{product.price_xtr} · "
+                        f"库存{product.available}"
+                    ),
+                    callback_data=f"adm:product:{product.id}",
+                )
+            ]
         )
-        product_buttons = [
-            InlineKeyboardButton(text="导入卡密", callback_data=f"adm:cards:{product.id}"),
-            InlineKeyboardButton(text="启停", callback_data=f"adm:toggle:{product.id}"),
-        ]
-        rows.append(product_buttons)
-        plugin_buttons = [
-            button
-            for plugin in get_plugin_registry().plugins
-            if (button := plugin.admin_product_button(product.id)) is not None
-        ]
-        if plugin_buttons:
-            rows.append(plugin_buttons)
     rows.append(
         [
             InlineKeyboardButton(text="➕ 新增商品", callback_data="adm:new"),
@@ -246,6 +241,48 @@ async def admin_product_list(callback: CallbackQuery) -> None:
     )
     await callback.message.answer(
         "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+
+
+@router.callback_query(F.data.startswith("adm:product:"))
+async def admin_product_detail(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("无权限", show_alert=True)
+        return
+    try:
+        product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("参数错误", show_alert=True)
+        return
+    async with SessionFactory() as session:
+        products = await list_admin_products(session)
+    product = next((item for item in products if item.id == product_id), None)
+    if product is None:
+        await callback.answer("商品不存在", show_alert=True)
+        return
+    icon = "✅" if product.status == "active" else "⏸"
+    rows = [
+        [
+            InlineKeyboardButton(text="📥 导入卡密", callback_data=f"adm:cards:{product.id}"),
+            InlineKeyboardButton(text="⏯ 启停商品", callback_data=f"adm:toggle:{product.id}"),
+        ]
+    ]
+    plugin_buttons = [
+        button
+        for plugin in get_plugin_registry().plugins
+        if (button := plugin.admin_product_button(product.id)) is not None
+    ]
+    for index in range(0, len(plugin_buttons), 2):
+        rows.append(plugin_buttons[index : index + 2])
+    rows.append([InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")])
+    await callback.answer()
+    await callback.message.answer(
+        "📦 <b>商品管理</b>\n\n"
+        f"商品：{html.escape(product.name)}\n"
+        f"状态：{icon} {html.escape(product.status)}\n"
+        f"Stars：⭐ {product.price_xtr}\n"
+        f"本地库存：{product.available}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 
@@ -610,7 +647,7 @@ async def ask_usdt_review(callback: CallbackQuery) -> None:
                 [
                     InlineKeyboardButton(
                         text=label,
-                        callback_data=f"adm:usdt:do:{action}:{payment_id}:{token}",
+                        callback_data=f"ud:d:{action}:{payment_id}:{token}",
                         style="success" if action == "a" else "danger",
                     )
                 ],
@@ -620,7 +657,7 @@ async def ask_usdt_review(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("adm:usdt:do:a:"))
+@router.callback_query(F.data.startswith("ud:d:a:"))
 async def approve_usdt_order(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
@@ -631,7 +668,7 @@ async def approve_usdt_order(callback: CallbackQuery) -> None:
     )
 
     try:
-        _, _, _, _, raw_payment_id, token = callback.data.split(":", 5)
+        _, _, _, raw_payment_id, token = callback.data.split(":", 4)
         payment_id = uuid.UUID(raw_payment_id)
         from redis.asyncio import Redis
 
@@ -681,7 +718,7 @@ async def approve_usdt_order(callback: CallbackQuery) -> None:
         )
 
 
-@router.callback_query(F.data.startswith("adm:usdt:do:r:"))
+@router.callback_query(F.data.startswith("ud:d:r:"))
 async def reject_usdt_order(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
@@ -692,7 +729,7 @@ async def reject_usdt_order(callback: CallbackQuery) -> None:
     )
 
     try:
-        _, _, _, _, raw_payment_id, token = callback.data.split(":", 5)
+        _, _, _, raw_payment_id, token = callback.data.split(":", 4)
         payment_id = uuid.UUID(raw_payment_id)
         from redis.asyncio import Redis
 

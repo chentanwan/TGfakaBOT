@@ -30,24 +30,16 @@ class PriceManagerPlugin:
     def __init__(self) -> None:
         self.router = Router(name="plugin_price_manager")
         self.router.callback_query.register(self._list, F.data == "plugin:prices:list")
-        self.router.callback_query.register(
-            self._product, F.data.startswith("plugin:prices:product:")
-        )
-        self.router.callback_query.register(
-            self._start_edit, F.data.startswith("plugin:prices:edit:")
-        )
-        self.router.callback_query.register(
-            self._disable, F.data.startswith("plugin:prices:disable:")
-        )
+        self.router.callback_query.register(self._product, F.data.startswith("pp:p:"))
+        self.router.callback_query.register(self._start_edit, F.data.startswith("pp:e:"))
+        self.router.callback_query.register(self._disable, F.data.startswith("pp:d:"))
         self.router.message.register(self._finish_edit, EditPrice.amount)
 
     def catalog_button(self, product: PluginProduct) -> InlineKeyboardButton | None:
         return None
 
     def admin_product_button(self, product_id: uuid.UUID) -> InlineKeyboardButton | None:
-        return InlineKeyboardButton(
-            text="💰 价格设置", callback_data=f"plugin:prices:product:{product_id}"
-        )
+        return InlineKeyboardButton(text="💰 价格", callback_data=f"pp:p:{product_id}")
 
     def admin_home_buttons(self) -> list[list[InlineKeyboardButton]]:
         return []
@@ -77,7 +69,7 @@ class PriceManagerPlugin:
             [
                 InlineKeyboardButton(
                     text=product.name[:30],
-                    callback_data=f"plugin:prices:product:{product.id}",
+                    callback_data=f"pp:p:{product.id}",
                 )
             ]
             for product in products
@@ -136,26 +128,16 @@ class PriceManagerPlugin:
                 )
             )
         rows = [
+            [InlineKeyboardButton(text="⭐ 设置 Stars", callback_data=f"pp:e:{product_id}:stars")],
             [
+                InlineKeyboardButton(text="₮ 设置 USDT", callback_data=f"pp:e:{product_id}:usdt"),
                 InlineKeyboardButton(
-                    text="⭐ 设置 Stars", callback_data=f"plugin:prices:edit:{product_id}:stars"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="₮ 设置 USDT", callback_data=f"plugin:prices:edit:{product_id}:usdt"
-                ),
-                InlineKeyboardButton(
-                    text="💵 设置余额", callback_data=f"plugin:prices:edit:{product_id}:balance"
+                    text="💵 设置余额", callback_data=f"pp:e:{product_id}:balance"
                 ),
             ],
             [
-                InlineKeyboardButton(
-                    text="停用 USDT", callback_data=f"plugin:prices:disable:{product_id}:usdt"
-                ),
-                InlineKeyboardButton(
-                    text="停用余额", callback_data=f"plugin:prices:disable:{product_id}:balance"
-                ),
+                InlineKeyboardButton(text="停用 USDT", callback_data=f"pp:d:{product_id}:usdt"),
+                InlineKeyboardButton(text="停用余额", callback_data=f"pp:d:{product_id}:balance"),
             ],
             [InlineKeyboardButton(text="« 价格设置", callback_data="plugin:prices:list")],
         ]
@@ -169,7 +151,7 @@ class PriceManagerPlugin:
             await callback.answer("无权限", show_alert=True)
             return
         try:
-            _, _, _, raw_product_id, provider = callback.data.split(":", 4)
+            _, _, raw_product_id, provider = callback.data.split(":", 3)
             product_id = uuid.UUID(raw_product_id)
             if provider not in {"stars", "usdt", "balance"}:
                 raise ValueError
@@ -262,7 +244,7 @@ class PriceManagerPlugin:
                     [
                         InlineKeyboardButton(
                             text="返回商品价格",
-                            callback_data=f"plugin:prices:product:{product_id}",
+                            callback_data=f"pp:p:{product_id}",
                         )
                     ]
                 ]
@@ -274,7 +256,7 @@ class PriceManagerPlugin:
             await callback.answer("无权限", show_alert=True)
             return
         try:
-            _, _, _, raw_product_id, provider = callback.data.split(":", 4)
+            _, _, raw_product_id, provider = callback.data.split(":", 3)
             product_id = uuid.UUID(raw_product_id)
             if provider not in {"usdt", "balance"}:
                 raise ValueError
@@ -306,7 +288,7 @@ class PriceManagerPlugin:
                     [
                         InlineKeyboardButton(
                             text="返回商品价格",
-                            callback_data=f"plugin:prices:product:{product_id}",
+                            callback_data=f"pp:p:{product_id}",
                         )
                     ]
                 ]

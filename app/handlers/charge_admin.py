@@ -27,7 +27,6 @@ class ReconcileCharge(StatesGroup):
     evidence = State()
 
 
-
 def _back_markup(callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="« 管理后台", callback_data=callback_data)]]
@@ -111,7 +110,7 @@ async def ask_orphan_refund(callback: CallbackQuery) -> None:
                 [
                     InlineKeyboardButton(
                         text="确认退款",
-                        callback_data=f"adm:charge:do:{charge_id}:{token}",
+                        callback_data=f"ch:d:{charge_id}:{token}",
                     )
                 ],
                 [InlineKeyboardButton(text="取消", callback_data="adm:charges:list")],
@@ -120,13 +119,13 @@ async def ask_orphan_refund(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("adm:charge:do:"))
+@router.callback_query(F.data.startswith("ch:d:"))
 async def execute_orphan_refund(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer("无权限", show_alert=True)
         return
     try:
-        _, _, _, raw_charge_id, token = callback.data.split(":", 4)
+        _, _, raw_charge_id, token = callback.data.split(":", 3)
         charge_id = uuid.UUID(raw_charge_id)
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
