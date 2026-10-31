@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import card_vault
 from app.db.base import CardStatus, ProductStatus
-from app.db.models import SKU, Card, Product
+from app.db.models import SKU, Card, Product, ProductPrice
 from app.services.audit import record_admin_action
 
 
@@ -15,7 +15,7 @@ from app.services.audit import record_admin_action
 class AdminProduct:
     id: uuid.UUID
     name: str
-    price_xtr: int
+    price_usd_minor: int | None
     status: str
     available: int
 
@@ -25,16 +25,20 @@ class RestockResult:
     inserted: int
     duplicates: int
     current_stock: int
-    unit_price_xtr: int
+    unit_price_usd_minor: int | None
     product_name: str
 
 
 async def create_product(
-    session: AsyncSession, *, name: str, description: str, price_xtr: int,
+    session: AsyncSession,
+    *,
+    name: str,
+    description: str,
+    price_usd_minor: int,
     admin_telegram_id: int | None = None,
 ) -> Product:
-    if price_xtr < 1:
-        raise ValueError("Stars 价格必须为正整数")
+    if price_usd_minor < 1:
+        raise ValueError("美元价格必须大于 0")
     async with session.begin():
         product = Product(
             name=name.strip(),
@@ -43,21 +47,37 @@ async def create_product(
         )
         session.add(product)
         await session.flush()
-        session.add(
-            SKU(
-                product_id=product.id,
-                code=f"default-{product.id}",
-                name="Default",
-                price_xtr=price_xtr,
-                is_default=True,
-                is_active=True,
-            )
+        sku = SKU(
+            product_id=product.id,
+            code=f"default-{product.id}",
+            name="Default",
+            price_xtr=1,
+            stars_enabled=False,
+            is_default=True,
+            is_active=True,
+        )
+        session.add(sku)
+        await session.flush()
+        session.add_all(
+            [
+                ProductPrice(
+                    sku_id=sku.id,
+                    provider=provider,
+                    currency="USD",
+                    amount_minor=price_usd_minor,
+                    is_active=True,
+                )
+                for provider in ("usdt", "balance")
+            ]
         )
         if admin_telegram_id is not None:
             await record_admin_action(
-                session, admin_telegram_id=admin_telegram_id, action="product_create",
-                target_type="product", target_id=str(product.id),
-                details={"name": product.name, "price_xtr": price_xtr},
+                session,
+                admin_telegram_id=admin_telegram_id,
+                action="product_create",
+                target_type="product",
+                target_id=str(product.id),
+                details={"name": product.name, "price_usd_minor": price_usd_minor},
             )
     return product
 
@@ -66,11 +86,17 @@ async def list_admin_products(session: AsyncSession) -> list[AdminProduct]:
     available = func.count(Card.id).filter(Card.status == CardStatus.AVAILABLE)
     rows = (
         await session.execute(
-            select(Product, SKU, available.label("available"))
+            select(Product, SKU, ProductPrice, available.label("available"))
             .join(SKU, SKU.product_id == Product.id)
+            .outerjoin(
+                ProductPrice,
+                (ProductPrice.sku_id == SKU.id)
+                & (ProductPrice.provider == "usdt")
+                & ProductPrice.is_active.is_(True),
+            )
             .outerjoin(Card, Card.sku_id == SKU.id)
             .where(SKU.is_default.is_(True))
-            .group_by(Product.id, SKU.id)
+            .group_by(Product.id, SKU.id, ProductPrice.id)
             .order_by(Product.created_at.desc())
         )
     ).all()
@@ -78,16 +104,19 @@ async def list_admin_products(session: AsyncSession) -> list[AdminProduct]:
         AdminProduct(
             id=product.id,
             name=product.name,
-            price_xtr=sku.price_xtr,
+            price_usd_minor=price.amount_minor if price else None,
             status=product.status.value,
             available=int(stock),
         )
-        for product, sku, stock in rows
+        for product, sku, price, stock in rows
     ]
 
 
 async def import_cards(
-    session: AsyncSession, *, product_id: uuid.UUID, secrets: list[str],
+    session: AsyncSession,
+    *,
+    product_id: uuid.UUID,
+    secrets: list[str],
     admin_telegram_id: int | None = None,
 ) -> RestockResult:
     normalized = list(dict.fromkeys(secret.strip() for secret in secrets if secret.strip()))
@@ -118,6 +147,13 @@ async def import_cards(
                 .on_conflict_do_nothing(index_elements=["secret_fingerprint"])
             )
             inserted += result.rowcount or 0
+        usd_price = await session.scalar(
+            select(ProductPrice.amount_minor).where(
+                ProductPrice.sku_id == sku.id,
+                ProductPrice.provider == "usdt",
+                ProductPrice.is_active.is_(True),
+            )
+        )
         current_stock = await session.scalar(
             select(func.count(Card.id)).where(
                 Card.sku_id == sku.id, Card.status == CardStatus.AVAILABLE
@@ -125,13 +161,18 @@ async def import_cards(
         )
         if admin_telegram_id is not None:
             await record_admin_action(
-                session, admin_telegram_id=admin_telegram_id, action="inventory_import",
-                target_type="product", target_id=str(product_id),
+                session,
+                admin_telegram_id=admin_telegram_id,
+                action="inventory_import",
+                target_type="product",
+                target_id=str(product_id),
                 details={"inserted": inserted, "duplicates": len(normalized) - inserted},
             )
     return RestockResult(
-        inserted=inserted, duplicates=len(normalized) - inserted,
-        current_stock=int(current_stock or 0), unit_price_xtr=sku.price_xtr,
+        inserted=inserted,
+        duplicates=len(normalized) - inserted,
+        current_stock=int(current_stock or 0),
+        unit_price_usd_minor=usd_price,
         product_name=product_name or "",
     )
 
@@ -150,8 +191,11 @@ async def toggle_product(
         )
         if admin_telegram_id is not None:
             await record_admin_action(
-                session, admin_telegram_id=admin_telegram_id, action="product_toggle",
-                target_type="product", target_id=str(product_id),
+                session,
+                admin_telegram_id=admin_telegram_id,
+                action="product_toggle",
+                target_type="product",
+                target_id=str(product_id),
                 details={"status": product.status.value},
             )
         return product.status
@@ -171,22 +215,31 @@ class AdminUser:
 
 async def find_admin_user(session: AsyncSession, telegram_user_id: int) -> AdminUser | None:
     from app.db.models import User
+
     user = await session.scalar(select(User).where(User.telegram_user_id == telegram_user_id))
     if user is None:
         return None
     return AdminUser(
-        telegram_user_id=user.telegram_user_id, username=user.username,
-        display_name=user.display_name or "", balance_minor=user.balance_minor,
-        points=user.points, order_count=user.order_count,
-        total_spent_minor=user.total_spent_minor, status=user.status.value,
+        telegram_user_id=user.telegram_user_id,
+        username=user.username,
+        display_name=user.display_name or "",
+        balance_minor=user.balance_minor,
+        points=user.points,
+        order_count=user.order_count,
+        total_spent_minor=user.total_spent_minor,
+        status=user.status.value,
     )
 
 
 async def adjust_user_balance(
-    session: AsyncSession, *, telegram_user_id: int, delta_minor: int,
+    session: AsyncSession,
+    *,
+    telegram_user_id: int,
+    delta_minor: int,
     admin_telegram_id: int | None = None,
 ) -> int:
     from app.db.models import User
+
     if delta_minor == 0:
         raise ValueError("调整金额不能为 0")
     async with session.begin():
@@ -200,8 +253,11 @@ async def adjust_user_balance(
         user.balance_minor += delta_minor
         if admin_telegram_id is not None:
             await record_admin_action(
-                session, admin_telegram_id=admin_telegram_id, action="balance_adjust",
-                target_type="user", target_id=str(telegram_user_id),
+                session,
+                admin_telegram_id=admin_telegram_id,
+                action="balance_adjust",
+                target_type="user",
+                target_id=str(telegram_user_id),
                 details={"delta_minor": delta_minor, "balance_minor": user.balance_minor},
             )
         return user.balance_minor
@@ -210,8 +266,7 @@ async def adjust_user_balance(
 async def list_broadcast_user_ids(session: AsyncSession) -> list[int]:
     from app.db.base import UserStatus
     from app.db.models import User
+
     return list(
-        await session.scalars(
-            select(User.telegram_user_id).where(User.status == UserStatus.ACTIVE)
-        )
+        await session.scalars(select(User.telegram_user_id).where(User.status == UserStatus.ACTIVE))
     )

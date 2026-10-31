@@ -130,17 +130,25 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
     ).all()
     sku_ids = [sku.id for _, sku, _, _ in rows]
     price_rows = (
-        await session.execute(
-            select(ProductPrice).where(
-                ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
+        (
+            await session.execute(
+                select(ProductPrice).where(
+                    ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
+                )
             )
         )
-    ).scalars().all() if sku_ids else []
+        .scalars()
+        .all()
+        if sku_ids
+        else []
+    )
     supplier_rows = (
-        await session.execute(
-            select(SupplierProduct).where(SupplierProduct.sku_id.in_(sku_ids))
-        )
-    ).scalars().all() if sku_ids else []
+        (await session.execute(select(SupplierProduct).where(SupplierProduct.sku_id.in_(sku_ids))))
+        .scalars()
+        .all()
+        if sku_ids
+        else []
+    )
     supplier_skus = {
         supplier.sku_id
         for supplier in supplier_rows
@@ -165,9 +173,7 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             stock=int(stock),
             sku_id=sku.id,
             sku_name=sku.name,
-            balance_price_minor=(
-                prices_by_sku.get(sku.id, {}).get("balance", ("USD", None))[1]
-            ),
+            balance_price_minor=(prices_by_sku.get(sku.id, {}).get("balance", ("USD", None))[1]),
         )
         for product, sku, category, stock in rows
     ]
@@ -208,26 +214,33 @@ async def list_product_variants(
     ).all()
     sku_ids = [sku.id for sku, _ in rows]
     prices = (
-        await session.scalars(
-            select(ProductPrice).where(
-                ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
+        (
+            await session.scalars(
+                select(ProductPrice).where(
+                    ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
+                )
             )
-        )
-    ).all() if sku_ids else []
+        ).all()
+        if sku_ids
+        else []
+    )
     suppliers = (
-        await session.scalars(
-            select(SupplierProduct).where(SupplierProduct.sku_id.in_(sku_ids))
-        )
-    ).all() if sku_ids else []
+        (
+            await session.scalars(
+                select(SupplierProduct).where(SupplierProduct.sku_id.in_(sku_ids))
+            )
+        ).all()
+        if sku_ids
+        else []
+    )
     supplier_stock = {
-        item.sku_id
-        for item in suppliers
-        if item.in_stock and not item.suspended_for_profit
+        item.sku_id for item in suppliers if item.in_stock and not item.suspended_for_profit
     }
     prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
     for price in prices:
         prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
-            price.currency, price.amount_minor
+            price.currency,
+            price.amount_minor,
         )
     return [
         CatalogProduct(
@@ -255,7 +268,7 @@ async def create_order(
     username: str | None,
     display_name: str,
     product_id: uuid.UUID,
-    payment_provider: str = "telegram_stars",
+    payment_provider: str,
 ) -> CreatedOrder:
     now = datetime.now(UTC)
     async with session.begin():
@@ -296,25 +309,19 @@ async def create_order(
             raise ShopError("该上游商品需要邮箱激活，当前购买流程暂不支持")
 
         if payment_provider == "telegram_stars":
-            if not sku.stars_enabled:
-                raise ShopError("该商品未启用 Stars 支付")
-            currency = "XTR"
-            total_amount = sku.price_xtr
-        else:
-            price_provider = (
-                "usdt" if payment_provider.startswith("usdt_") else payment_provider
+            raise ShopError("Stars 支付已停用，请选择美元支付方式")
+        price_provider = "usdt" if payment_provider.startswith("usdt_") else payment_provider
+        plugin_price = await session.scalar(
+            select(ProductPrice).where(
+                ProductPrice.sku_id == sku.id,
+                ProductPrice.provider == price_provider,
+                ProductPrice.is_active.is_(True),
             )
-            plugin_price = await session.scalar(
-                select(ProductPrice).where(
-                    ProductPrice.sku_id == sku.id,
-                    ProductPrice.provider == price_provider,
-                    ProductPrice.is_active.is_(True),
-                )
-            )
-            if plugin_price is None:
-                raise ShopError("该商品暂不支持此支付方式")
-            currency = plugin_price.currency
-            total_amount = plugin_price.amount_minor
+        )
+        if plugin_price is None:
+            raise ShopError("该商品暂不支持此支付方式")
+        currency = plugin_price.currency
+        total_amount = plugin_price.amount_minor
         expires_at = now + timedelta(minutes=settings.order_reservation_minutes)
         order = Order(
             public_id=f"TG{now:%y%m%d}{secrets.token_hex(3).upper()}",

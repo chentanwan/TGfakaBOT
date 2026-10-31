@@ -1,6 +1,7 @@
 import asyncio
 import html
 import uuid
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramRetryAfter
@@ -64,6 +65,10 @@ def _back_markup(callback_data: str, label: str = "« 返回") -> InlineKeyboard
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=callback_data)]]
     )
+
+
+def _usd_price(amount_minor: int | None) -> str:
+    return f"${amount_minor / 100:.2f}" if amount_minor is not None else "未设置"
 
 
 def admin_keyboard() -> InlineKeyboardMarkup:
@@ -179,17 +184,18 @@ async def new_product_description(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(description=description)
     await state.set_state(NewProduct.price)
-    await message.answer("请输入 Stars 整数价格，例如 50：")
+    await message.answer("请输入美元价格，例如 4.99：")
 
 
 @router.message(NewProduct.price)
 async def new_product_price(message: Message, state: FSMContext) -> None:
     try:
-        price = int((message.text or "").strip())
-        if price < 1:
+        decimal_price = Decimal((message.text or "").strip())
+        if not decimal_price.is_finite() or decimal_price <= 0:
             raise ValueError
-    except ValueError:
-        await message.answer("请输入大于 0 的整数 Stars 价格。")
+        price = int((decimal_price * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (ValueError, InvalidOperation):
+        await message.answer("请输入有效的美元价格，例如 4.99。")
         return
     data = await state.get_data()
     async with SessionFactory() as session:
@@ -197,7 +203,7 @@ async def new_product_price(message: Message, state: FSMContext) -> None:
             session,
             name=data["name"],
             description=data["description"],
-            price_xtr=price,
+            price_usd_minor=price,
             admin_telegram_id=message.from_user.id,
         )
     await state.clear()
@@ -226,8 +232,8 @@ async def admin_product_list(callback: CallbackQuery) -> None:
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{icon} {product.name[:22]} · ⭐{product.price_xtr} · "
-                        f"库存{product.available}"
+                        f"{icon} {product.name[:22]} · "
+                        f"{_usd_price(product.price_usd_minor)} · 库存{product.available}"
                     ),
                     callback_data=f"adm:product:{product.id}",
                 )
@@ -280,7 +286,7 @@ async def admin_product_detail(callback: CallbackQuery) -> None:
         "📦 <b>商品管理</b>\n\n"
         f"商品：{html.escape(product.name)}\n"
         f"状态：{icon} {html.escape(product.status)}\n"
-        f"Stars：⭐ {product.price_xtr}\n"
+        f"美元价格：{_usd_price(product.price_usd_minor)}\n"
         f"本地库存：{product.available}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -330,7 +336,7 @@ async def cards_import(message: Message, state: FSMContext) -> None:
             f"📦 <b>{html.escape(result.product_name)}</b>\n\n"
             f"➕ Added: {result.inserted}\n"
             f"📦 Current stock: {result.current_stock}\n"
-            f"💵 Unit price: ⭐ {result.unit_price_xtr}",
+            f"💵 Unit price: {_usd_price(result.unit_price_usd_minor)}",
         )
 
 

@@ -10,7 +10,6 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    LabeledPrice,
     Message,
     PreCheckoutQuery,
 )
@@ -30,7 +29,6 @@ from app.services.accounts import (
 )
 from app.services.orders import (
     ShopError,
-    cancel_unpaid_order,
     create_order,
     get_user_order,
     list_catalog_categories,
@@ -96,10 +94,11 @@ def _home_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 def _product_price(product) -> str:
-    if "usdt" in product.plugin_prices:
-        currency, amount = product.plugin_prices["usdt"]
-        return f"{amount / 100:.2f} {currency}"
-    return f"⭐ {product.price_xtr}"
+    for provider in ("usdt", "balance"):
+        if provider in product.plugin_prices:
+            currency, amount = product.plugin_prices[provider]
+            return f"${amount / 100:.2f} {currency}"
+    return "Price unavailable"
 
 
 async def _user_language(telegram_user_id: int) -> str:
@@ -916,15 +915,6 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
                 )
             ]
         )
-    if product.price_xtr and product.stock > 0:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"⭐ Buy · {product.price_xtr} XTR",
-                    callback_data=f"buy:{product.id}",
-                )
-            ]
-        )
     if available and "usdt" in product.plugin_prices:
         _, usdt_amount = product.plugin_prices["usdt"]
         async with SessionFactory() as session:
@@ -1207,73 +1197,8 @@ async def support(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("buy:"))
-async def confirm_stars_purchase(callback: CallbackQuery) -> None:
-    await callback.answer()
-    try:
-        product_id = uuid.UUID(callback.data.split(":", 1)[1])
-    except (ValueError, IndexError):
-        await callback.message.answer("Invalid product.")
-        return
-    async with SessionFactory() as session:
-        products = await list_products(session)
-    product = next((item for item in products if item.id == product_id), None)
-    if product is None or product.stock < 1:
-        await callback.message.answer("This product is unavailable.")
-        return
-    await callback.message.answer(
-        "🧾 <b>Confirm purchase</b>\n\n"
-        f"Product: {html.escape(product.name)}\n"
-        f"Price: ⭐ {product.price_xtr} XTR\n"
-        "Delivery: Instant\n\nContinue to Telegram Stars payment?",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✅ Confirm and pay", callback_data=f"buy_confirm:{product.id}"
-                    )
-                ],
-                [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:product:{product.id}")],
-            ]
-        ),
-    )
-
-
-@router.callback_query(F.data.startswith("buy_confirm:"))
-async def buy_product(callback: CallbackQuery) -> None:
-    await callback.answer()
-    try:
-        product_id = uuid.UUID(callback.data.split(":", 1)[1])
-    except (ValueError, IndexError):
-        await callback.message.answer("无效商品。")
-        return
-    async with SessionFactory() as session:
-        try:
-            order = await create_order(
-                session,
-                telegram_user_id=callback.from_user.id,
-                username=callback.from_user.username,
-                display_name=callback.from_user.full_name,
-                product_id=product_id,
-            )
-        except ShopError as exc:
-            await callback.message.answer(f"❌ {html.escape(str(exc))}")
-            return
-    try:
-        await callback.bot.send_invoice(
-            chat_id=callback.from_user.id,
-            title=order.product_name[:32],
-            description=order.description[:255],
-            payload=order.invoice_payload,
-            currency="XTR",
-            prices=[LabeledPrice(label=order.product_name[:32], amount=order.total_amount)],
-            provider_token="",
-            start_parameter=f"order-{order.public_id.lower()}",
-        )
-    except Exception:
-        async with SessionFactory() as session:
-            await cancel_unpaid_order(session, order.invoice_payload)
-        raise
+# Historical Stars payment handlers below remain registered only to safely process
+# already-issued Telegram invoices. New Stars orders are no longer offered.
 
 
 @router.pre_checkout_query()

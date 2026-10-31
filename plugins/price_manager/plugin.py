@@ -113,7 +113,7 @@ class PriceManagerPlugin:
         }.get(pricing_mode, "普通手动价格")
         lines = [
             f"💰 <b>{html.escape(product.name)}</b>",
-            f"Stars：⭐ {sku.price_xtr} · {'启用' if sku.stars_enabled else '停用'}",
+            "统一使用美元价格，不再提供 Telegram Stars 付款。",
         ]
         lines.append(f"USDT 定价策略：{pricing_label}")
         for provider, label in (("usdt", "USDT"), ("balance", "余额")):
@@ -128,7 +128,6 @@ class PriceManagerPlugin:
                 )
             )
         rows = [
-            [InlineKeyboardButton(text="⭐ 设置 Stars", callback_data=f"pp:e:{product_id}:stars")],
             [
                 InlineKeyboardButton(text="₮ 设置 USDT", callback_data=f"pp:e:{product_id}:usdt"),
                 InlineKeyboardButton(
@@ -153,7 +152,7 @@ class PriceManagerPlugin:
         try:
             _, _, raw_product_id, provider = callback.data.split(":", 3)
             product_id = uuid.UUID(raw_product_id)
-            if provider not in {"stars", "usdt", "balance"}:
+            if provider not in {"usdt", "balance"}:
                 raise ValueError
         except (ValueError, IndexError):
             await callback.answer("参数错误", show_alert=True)
@@ -161,8 +160,7 @@ class PriceManagerPlugin:
         await state.update_data(price_product_id=str(product_id), price_provider=provider)
         await state.set_state(EditPrice.amount)
         await callback.answer()
-        prompt = "请输入 Stars 正整数价格" if provider == "stars" else "请输入美元价格，例如 4.99"
-        await callback.message.answer(f"{prompt}；发送 /cancel 取消。")
+        await callback.message.answer("请输入美元价格，例如 4.99；发送 /cancel 取消。")
 
     async def _finish_edit(self, message: Message, state: FSMContext) -> None:
         if not is_admin(message.from_user.id):
@@ -171,68 +169,43 @@ class PriceManagerPlugin:
         try:
             product_id = uuid.UUID(data["price_product_id"])
             provider = data["price_provider"]
-            if provider == "stars":
-                amount = int((message.text or "").strip())
-                if amount < 1:
-                    raise ValueError
+            decimal_amount = Decimal((message.text or "").strip())
+            if not decimal_amount.is_finite() or decimal_amount <= 0:
+                raise ValueError
+            amount = int((decimal_amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            async with SessionFactory() as session:
+                await set_product_plugin_price(
+                    session,
+                    product_id=product_id,
+                    provider=provider,
+                    currency="USD",
+                    amount_minor=amount,
+                )
+            if provider == "usdt":
                 async with SessionFactory() as session, session.begin():
                     sku = await session.scalar(
-                        select(SKU)
-                        .where(SKU.product_id == product_id, SKU.is_default.is_(True))
-                        .with_for_update()
+                        select(SKU).where(SKU.product_id == product_id, SKU.is_default.is_(True))
                     )
-                    if sku is None:
-                        raise ProductPriceError("商品不存在")
-                    sku.price_xtr = amount
-                    sku.stars_enabled = True
-                    await record_admin_action(
-                        session,
-                        admin_telegram_id=message.from_user.id,
-                        action="product_price_set",
-                        target_type="product",
-                        target_id=str(product_id),
-                        details={"provider": "stars", "amount": amount},
-                    )
-            else:
-                decimal_amount = Decimal((message.text or "").strip())
-                if not decimal_amount.is_finite() or decimal_amount <= 0:
-                    raise ValueError
-                amount = int((decimal_amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-                async with SessionFactory() as session:
-                    await set_product_plugin_price(
-                        session,
-                        product_id=product_id,
-                        provider=provider,
-                        currency="USD",
-                        amount_minor=amount,
-                    )
-                if provider == "usdt":
-                    async with SessionFactory() as session, session.begin():
-                        sku = await session.scalar(
-                            select(SKU).where(
-                                SKU.product_id == product_id, SKU.is_default.is_(True)
-                            )
+                    price = await session.scalar(
+                        select(ProductPrice).where(
+                            ProductPrice.sku_id == sku.id,
+                            ProductPrice.provider == "usdt",
                         )
-                        price = await session.scalar(
-                            select(ProductPrice).where(
-                                ProductPrice.sku_id == sku.id,
-                                ProductPrice.provider == "usdt",
-                            )
-                        )
-                        if price is not None:
-                            price.metadata_json = {
-                                **(price.metadata_json or {}),
-                                "pricing": "manual_protected",
-                            }
-                async with SessionFactory() as session, session.begin():
-                    await record_admin_action(
-                        session,
-                        admin_telegram_id=message.from_user.id,
-                        action="product_price_set",
-                        target_type="product",
-                        target_id=str(product_id),
-                        details={"provider": provider, "amount_minor": amount},
                     )
+                    if price is not None:
+                        price.metadata_json = {
+                            **(price.metadata_json or {}),
+                            "pricing": "manual_protected",
+                        }
+            async with SessionFactory() as session, session.begin():
+                await record_admin_action(
+                    session,
+                    admin_telegram_id=message.from_user.id,
+                    action="product_price_set",
+                    target_type="product",
+                    target_id=str(product_id),
+                    details={"provider": provider, "amount_minor": amount},
+                )
         except (KeyError, ValueError, InvalidOperation, ProductPriceError):
             await message.answer("价格格式无效，请重新输入。")
             return
