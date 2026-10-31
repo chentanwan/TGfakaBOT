@@ -42,10 +42,7 @@ async def watchdog_loop() -> None:
                     await refresh_admin_cache()
                     await notify_administrators(
                         bot,
-                        _status_text(
-                            "offline",
-                            "Bot 心跳已中断，可能异常退出或网络中断；监控进程仍在线。",
-                        ),
+                        _status_text("offline"),
                     )
                 was_online = False
             await asyncio.sleep(10)
