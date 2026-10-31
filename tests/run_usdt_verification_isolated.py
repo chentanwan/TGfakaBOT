@@ -121,7 +121,7 @@ async def main() -> None:
             destination=destination,
             expected_amount_minor=100,
         )
-        assert result.state == "rejected" and result.reason == "到账金额不匹配"
+        assert result.state == "manual_review" and result.reason == "到账金额与订单金额不一致"
         state["evm_amount"] = 1_000_000
         state["evm_status"] = "0x0"
         result = await verify_usdt_payment(
@@ -131,7 +131,7 @@ async def main() -> None:
             destination=destination,
             expected_amount_minor=100,
         )
-        assert result.state == "rejected" and result.reason == "链上交易执行失败"
+        assert result.state == "manual_review" and result.reason == "链上交易执行失败"
         state["evm_status"] = "0x1"
         state["evm_token"] = "0x" + "c" * 40
         result = await verify_usdt_payment(
