@@ -94,11 +94,9 @@ def _home_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 def _product_price(product) -> str:
-    for provider in ("usdt", "balance"):
-        if provider in product.plugin_prices:
-            currency, amount = product.plugin_prices[provider]
-            return f"${amount / 100:.2f} {currency}"
-    return "Price unavailable"
+    if product.display_price_usd_minor is not None:
+        return f"${product.display_price_usd_minor / 100:.2f} USD"
+    return "USD price unavailable"
 
 
 async def _user_language(telegram_user_id: int) -> str:

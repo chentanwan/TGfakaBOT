@@ -40,6 +40,7 @@ class CatalogProduct:
     name: str
     description: str
     price_xtr: int
+    display_price_usd_minor: int | None
     plugin_prices: dict[str, tuple[str, int]]
     supplier_stock: bool
     stock: int
@@ -130,13 +131,7 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
     ).all()
     sku_ids = [sku.id for _, sku, _, _ in rows]
     price_rows = (
-        (
-            await session.execute(
-                select(ProductPrice).where(
-                    ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
-                )
-            )
-        )
+        (await session.execute(select(ProductPrice).where(ProductPrice.sku_id.in_(sku_ids))))
         .scalars()
         .all()
         if sku_ids
@@ -155,11 +150,16 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
         if supplier.in_stock and not supplier.suspended_for_profit
     }
     prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
+    display_prices: dict[uuid.UUID, int] = {}
     for price in price_rows:
-        prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
-            price.currency,
-            price.amount_minor,
-        )
+        if price.currency == "USD":
+            if price.provider == "usdt" or price.sku_id not in display_prices:
+                display_prices[price.sku_id] = price.amount_minor
+        if price.is_active:
+            prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
+                price.currency,
+                price.amount_minor,
+            )
     return [
         CatalogProduct(
             id=product.id,
@@ -168,6 +168,7 @@ async def list_products(session: AsyncSession) -> list[CatalogProduct]:
             name=product.name,
             description=product.description,
             price_xtr=sku.price_xtr,
+            display_price_usd_minor=display_prices.get(sku.id),
             plugin_prices=prices_by_sku.get(sku.id, {}),
             supplier_stock=sku.id in supplier_skus,
             stock=int(stock),
@@ -214,13 +215,7 @@ async def list_product_variants(
     ).all()
     sku_ids = [sku.id for sku, _ in rows]
     prices = (
-        (
-            await session.scalars(
-                select(ProductPrice).where(
-                    ProductPrice.sku_id.in_(sku_ids), ProductPrice.is_active.is_(True)
-                )
-            )
-        ).all()
+        (await session.scalars(select(ProductPrice).where(ProductPrice.sku_id.in_(sku_ids)))).all()
         if sku_ids
         else []
     )
@@ -237,11 +232,16 @@ async def list_product_variants(
         item.sku_id for item in suppliers if item.in_stock and not item.suspended_for_profit
     }
     prices_by_sku: dict[uuid.UUID, dict[str, tuple[str, int]]] = {}
+    display_prices: dict[uuid.UUID, int] = {}
     for price in prices:
-        prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
-            price.currency,
-            price.amount_minor,
-        )
+        if price.currency == "USD":
+            if price.provider == "usdt" or price.sku_id not in display_prices:
+                display_prices[price.sku_id] = price.amount_minor
+        if price.is_active:
+            prices_by_sku.setdefault(price.sku_id, {})[price.provider] = (
+                price.currency,
+                price.amount_minor,
+            )
     return [
         CatalogProduct(
             id=default.id,
@@ -250,6 +250,7 @@ async def list_product_variants(
             name=default.name,
             description=default.description,
             price_xtr=sku.price_xtr,
+            display_price_usd_minor=display_prices.get(sku.id),
             plugin_prices=prices_by_sku.get(sku.id, {}),
             supplier_stock=sku.id in supplier_stock,
             stock=int(stock),

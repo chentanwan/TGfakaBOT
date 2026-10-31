@@ -32,7 +32,8 @@ def test_customer_catalog_does_not_offer_stars_payment() -> None:
     assert 'text=f"⭐ Buy' not in source
     assert 'callback_data=f"buy:' not in source
     assert "send_invoice(" not in source
-    assert 'return "Price unavailable"' in source
+    assert 'return "USD price unavailable"' in source
+    assert "display_price_usd_minor" in source
 
 
 def test_new_products_use_usd_prices_and_disable_stars() -> None:
