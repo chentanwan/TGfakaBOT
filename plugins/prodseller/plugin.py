@@ -32,6 +32,7 @@ from app.services.supplier_orders import (
 )
 from plugins.prodseller.client import ProdsellerClient, ProdsellerError
 from plugins.prodseller.config import get_prodseller_settings
+from plugins.prodseller.pricing_settings import get_profit_percent, set_profit_percent
 
 logger = logging.getLogger(__name__)
 PROVIDER = "prodseller"
@@ -57,6 +58,10 @@ class RoutingPriority(StatesGroup):
     value = State()
 
 
+class PricingSettings(StatesGroup):
+    profit_percent = State()
+
+
 class ProdsellerPlugin:
     name = PROVIDER
     supplier_provider = True
@@ -65,6 +70,7 @@ class ProdsellerPlugin:
     def __init__(self) -> None:
         self.settings = get_prodseller_settings()
         self.client = ProdsellerClient(self.settings)
+        self._profit_percent = self.settings.prodseller_profit_percent
         self.router = Router(name="plugin_prodseller")
         self.router.callback_query.register(self._balance, F.data == "plugin:prodseller:balance")
         self.router.callback_query.register(self._sync, F.data == "plugin:prodseller:sync")
@@ -84,6 +90,10 @@ class ProdsellerPlugin:
         self.router.callback_query.register(self._audit_detail, F.data.startswith("ps:a:"))
         self.router.callback_query.register(self._choose_auto_pricing, F.data.startswith("ps:g:"))
         self.router.callback_query.register(self._apply_auto_pricing, F.data.startswith("ps:ap:"))
+        self.router.callback_query.register(
+            self._pricing_settings, F.data == "plugin:prodseller:pricing"
+        )
+        self.router.callback_query.register(self._start_profit_percent, F.data == "ps:set:percent")
         self.router.callback_query.register(self._mapping_detail, F.data.startswith("ps:m:"))
         self.router.callback_query.register(self._start_mapping, F.data.startswith("ps:map:"))
         self.router.callback_query.register(self._sync_mapping, F.data.startswith("ps:s:"))
@@ -107,6 +117,7 @@ class ProdsellerPlugin:
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
         self.router.message.register(self._save_custom_price, CustomPrice.amount)
         self.router.message.register(self._save_routing_priority, RoutingPriority.value)
+        self.router.message.register(self._save_profit_percent, PricingSettings.profit_percent)
         self._bot: Bot | None = None
         self._poll_task: asyncio.Task | None = None
         self._sync_task: asyncio.Task | None = None
@@ -143,13 +154,16 @@ class ProdsellerPlugin:
                 InlineKeyboardButton(
                     text="🩺 ProdSeller 健康", callback_data="plugin:prodseller:health"
                 ),
-                InlineKeyboardButton(
-                    text="🔗 手动导入 ID", callback_data="plugin:prodseller:import"
-                ),
+                InlineKeyboardButton(text="⚙️ 定价模式", callback_data="plugin:prodseller:pricing"),
             ],
+            [InlineKeyboardButton(text="🔗 手动导入 ID", callback_data="plugin:prodseller:import")],
         ]
 
     async def startup(self, bot: Bot) -> None:
+        async with SessionFactory() as session:
+            self._profit_percent = await get_profit_percent(
+                session, self.settings.prodseller_profit_percent
+            )
         self._bot = bot
         self._poll_task = asyncio.create_task(self._poll_pending_orders())
         self._sync_task = asyncio.create_task(self._sync_products_loop())
@@ -1114,6 +1128,123 @@ class ProdsellerPlugin:
         await state.clear()
         await message.answer(f"✅ 路由优先级已设置为 {priority}。")
 
+    async def _pricing_settings(self, callback: CallbackQuery) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        async with SessionFactory() as session:
+            percent = await get_profit_percent(session, self.settings.prodseller_profit_percent)
+        self._profit_percent = percent
+        await callback.answer()
+        await callback.message.answer(
+            "⚙️ <b>自动定价设置</b>\n\n"
+            f"📈 默认比例利润：<b>{percent}%</b>\n"
+            f"💵 默认固定利润：<b>${self.settings.prodseller_profit_fixed:.2f}</b>\n\n"
+            "修改后会立即更新所有使用比例自动定价的商品。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="✏️ 修改比例利润", callback_data="ps:set:percent")],
+                    [InlineKeyboardButton(text="⬅️ 供应商管理", callback_data="adm:suppliers")],
+                ]
+            ),
+        )
+
+    async def _start_profit_percent(self, callback: CallbackQuery, state: FSMContext) -> None:
+        if not self._is_admin(callback.from_user.id):
+            await callback.answer("无权限", show_alert=True)
+            return
+        await state.set_state(PricingSettings.profit_percent)
+        await callback.answer()
+        await callback.message.answer(
+            "📈 请输入自动定价利润比例，例如：<code>20</code> 或 <code>12.5</code>。\n"
+            "允许范围：0%–1000%，最多两位小数。"
+        )
+
+    async def _save_profit_percent(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.from_user.id):
+            await state.clear()
+            return
+        try:
+            async with SessionFactory() as session, session.begin():
+                old_percent = await get_profit_percent(
+                    session, self.settings.prodseller_profit_percent
+                )
+                percent = await set_profit_percent(session, message.text or "")
+                mappings = (
+                    await session.scalars(
+                        select(SupplierProduct).where(SupplierProduct.provider == PROVIDER)
+                    )
+                ).all()
+                updated = 0
+                for mapping in mappings:
+                    prices = (
+                        await session.scalars(
+                            select(ProductPrice)
+                            .where(
+                                ProductPrice.sku_id == mapping.sku_id,
+                                ProductPrice.provider.in_(("usdt", "balance")),
+                            )
+                            .with_for_update()
+                        )
+                    ).all()
+                    if (
+                        not prices
+                        or (prices[0].metadata_json or {}).get("pricing") != "auto_percent"
+                    ):
+                        continue
+                    sale_minor = int(
+                        (
+                            Decimal(mapping.cost_amount_minor)
+                            * (Decimal(100) + percent)
+                            / Decimal(100)
+                        ).to_integral_value(rounding=ROUND_CEILING)
+                    )
+                    metadata = {
+                        **(prices[0].metadata_json or {}),
+                        "source": PROVIDER,
+                        "pricing": "auto_percent",
+                        "profit_percent": str(percent),
+                        "minimum_safe_minor": sale_minor,
+                    }
+                    for price in prices:
+                        price.amount_minor = sale_minor
+                        price.currency = "USD"
+                        price.is_active = bool(mapping.in_stock)
+                        price.metadata_json = metadata
+                    mapping.suspended_for_profit = False
+                    mapping.suspension_reason = None
+                    updated += 1
+                await record_admin_action(
+                    session,
+                    admin_telegram_id=message.from_user.id,
+                    action="supplier_pricing_percent_set",
+                    target_type="supplier",
+                    target_id=PROVIDER,
+                    details={
+                        "old_percent": str(old_percent),
+                        "new_percent": str(percent),
+                        "updated_products": updated,
+                    },
+                )
+        except ValueError as exc:
+            await message.answer(f"❌ {html.escape(str(exc))}，请重新输入：")
+            return
+        self._profit_percent = percent
+        await state.clear()
+        await message.answer(
+            f"✅ 自动定价比例已设置为 <b>{percent}%</b>。\n已更新 {updated} 个比例自动定价商品。",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⚙️ 返回定价设置",
+                            callback_data="plugin:prodseller:pricing",
+                        )
+                    ]
+                ]
+            ),
+        )
+
     async def _choose_auto_pricing(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
@@ -1136,7 +1267,7 @@ class ProdsellerPlugin:
                     ],
                     [
                         InlineKeyboardButton(
-                            text=f"📈 比例利润 · {self.settings.prodseller_profit_percent}%",
+                            text=f"📈 比例利润 · {self._profit_percent}%",
                             callback_data=f"ps:ap:p:{mapping_id}",
                         )
                     ],
@@ -1195,7 +1326,7 @@ class ProdsellerPlugin:
                     metadata = {"profit_fixed_minor": fixed_minor}
                     label = f"固定利润 ${fixed_minor / 100:.2f}"
                 else:
-                    value = self.settings.prodseller_profit_percent
+                    value = self._profit_percent
                     sale_minor = int(
                         (
                             Decimal(mapping.cost_amount_minor)
@@ -1524,7 +1655,7 @@ class ProdsellerPlugin:
             pricing_metadata = {
                 "source": PROVIDER,
                 "pricing": "auto_percent",
-                "profit_percent": str(self.settings.prodseller_profit_percent),
+                "profit_percent": str(self._profit_percent),
                 "minimum_safe_minor": sale_minor,
             }
             session.add_all(
@@ -1618,7 +1749,7 @@ class ProdsellerPlugin:
             price.metadata_json = {
                 "source": PROVIDER,
                 "pricing": pricing_mode,
-                "profit_percent": str(self.settings.prodseller_profit_percent),
+                "profit_percent": str(self._profit_percent),
                 "minimum_safe_minor": sale_minor,
             }
             balance = await session.scalar(
@@ -1839,15 +1970,13 @@ class ProdsellerPlugin:
         if mode == "auto_fixed":
             return cost_minor + int(metadata.get("profit_fixed_minor", 0))
         if mode == "auto_percent":
-            percent = Decimal(
-                str(metadata.get("profit_percent", self.settings.prodseller_profit_percent))
-            )
+            percent = Decimal(str(metadata.get("profit_percent", self._profit_percent)))
             sale = Decimal(cost_minor) * (Decimal(100) + percent) / Decimal(100)
             return int(sale.to_integral_value(rounding=ROUND_CEILING))
         return self._sale_price(cost_minor)
 
     def _sale_price(self, cost_minor: int) -> int:
-        multiplier = (Decimal(100) + self.settings.prodseller_profit_percent) / Decimal(100)
+        multiplier = (Decimal(100) + self._profit_percent) / Decimal(100)
         fixed_minor = self.settings.prodseller_profit_fixed * Decimal(100)
         sale = Decimal(cost_minor) * multiplier + fixed_minor
         return int(sale.to_integral_value(rounding=ROUND_CEILING))
