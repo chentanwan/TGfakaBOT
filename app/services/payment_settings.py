@@ -11,7 +11,7 @@ from app.services.usdt_methods import UsdtMethod, configured_usdt_methods, is_va
 
 PAYMENT_METHODS_KEY = "usdt_payment_methods"
 _ALLOWED_IDS = ("usdt_binance", "usdt_bep20", "usdt_trc20", "usdt_arbitrum")
-_EDITABLE_FIELDS = {"label", "description", "destination", "minimum_topup_minor", "sort_order"}
+_EDITABLE_FIELDS = {"destination", "minimum_topup_minor"}
 
 
 def _serialize(method: UsdtMethod) -> dict:
@@ -92,13 +92,6 @@ async def update_payment_method(
         if amount < 10:
             raise ValueError("最低充值金额不能低于 $0.10")
         data[field] = amount
-    elif field == "sort_order":
-        data[field] = int(value)
-    else:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("内容不能为空")
-        data[field] = text
     payload[method_id] = data
     row.value = payload
     row.version += 1

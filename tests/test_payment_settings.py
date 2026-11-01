@@ -41,8 +41,6 @@ async def test_edit_and_toggle_payment_method(session_factory):
             "usdt_trc20",
             "usdt_arbitrum",
         ]
-        edited = await update_payment_method(session, config, "usdt_bep20", "label", "BSC USDT")
-        assert edited.label == "BSC USDT"
         edited = await update_payment_method(
             session, config, "usdt_bep20", "minimum_topup_minor", 250
         )
@@ -51,9 +49,17 @@ async def test_edit_and_toggle_payment_method(session_factory):
         assert toggled.enabled and toggled.available
     async with session_factory() as session:
         stored = await get_payment_method(session, config, "usdt_bep20")
-        assert stored.label == "BSC USDT"
         assert stored.minimum_topup_minor == 250
         assert stored.enabled
+
+
+@pytest.mark.asyncio
+async def test_rejects_nonessential_payment_fields(session_factory):
+    config = settings()
+    async with session_factory() as session:
+        for field in ("label", "description", "sort_order"):
+            with pytest.raises(ValueError, match="不支持"):
+                await update_payment_method(session, config, "usdt_bep20", field, "unused")
 
 
 @pytest.mark.asyncio

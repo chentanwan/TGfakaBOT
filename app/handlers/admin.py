@@ -368,11 +368,7 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
         f"\n\n💳 已启用渠道：{active_count}/{len(methods)}",
         f"\n🤖 自动核验：{'✅ 已开启' if settings.usdt_auto_verify_enabled else '⛔ 已关闭'}",
         f" · 已配置网络：{configured_count}",
-        f"\n⏱ 轮询：{settings.usdt_verify_poll_seconds} 秒",
-        f" · 超时：{settings.usdt_verify_timeout_seconds} 秒",
-        f"\n🔗 EVM 确认：{settings.usdt_evm_confirmations}",
-        f" · TRON 确认：{settings.usdt_tron_confirmations}",
-        "\n\n点击支付方式可编辑收款地址、最低金额及启停状态。",
+        "\n\n选择支付方式可设置收款信息、最低金额和启停状态。",
     ]
     method_buttons = []
     for method in methods:
@@ -383,10 +379,8 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
         lines.append(
             f"\n\n<b>{html.escape(method.label)}</b>"
             f"\n渠道：{'✅ 可用' if method.available else '⛔ 停用'}"
-            f" · 核验：{'🤖 自动' if auto_verify else '👤 人工'}"
-            f"\n说明：{html.escape(method.description or '未设置')}"
-            f"\n最低充值：${method.minimum_topup_minor / 100:.2f}"
-            f" · 排序：{method.sort_order}"
+            f" · {'🤖 自动核验' if auto_verify else '👤 人工审核'}"
+            f"\n最低金额：${method.minimum_topup_minor / 100:.2f}"
             f"\n收款信息：<code>{html.escape(destination)}</code>"
         )
         method_buttons.append(
@@ -396,7 +390,7 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
             )
         )
     rows = [method_buttons[index : index + 2] for index in range(0, len(method_buttons), 2)]
-    rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
+    rows.append([InlineKeyboardButton(text="⬅️ 管理后台", callback_data="adm:home")])
     await callback.message.answer(
         "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
@@ -417,18 +411,18 @@ async def payment_method_view(callback: CallbackQuery) -> None:
         await callback.answer("支付方式不存在", show_alert=True)
         return
     await callback.answer()
-    fields = (
-        ("名称", "label"),
-        ("说明", "description"),
-        ("收款信息", "destination"),
-        ("最低金额", "minimum"),
-        ("排序", "sort"),
-    )
-    field_buttons = [
-        InlineKeyboardButton(text=f"✏️ {label}", callback_data=f"adm:pay:edit:{field}:{method.id}")
-        for label, field in fields
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="📥 设置收款信息",
+                callback_data=f"adm:pay:edit:destination:{method.id}",
+            ),
+            InlineKeyboardButton(
+                text="💵 设置最低金额",
+                callback_data=f"adm:pay:edit:minimum:{method.id}",
+            ),
+        ]
     ]
-    rows = [field_buttons[:2], field_buttons[2:4], field_buttons[4:]]
     rows.append(
         [
             InlineKeyboardButton(
@@ -451,10 +445,8 @@ async def payment_method_view(callback: CallbackQuery) -> None:
         f"<b>{html.escape(method.label)}</b>\n"
         f"渠道状态：{'✅ 可用' if method.available else '⛔ 停用'}\n"
         f"自动核验：{verification_status}\n"
-        f"说明：{html.escape(method.description or '未设置')}\n"
         f"收款信息：<code>{masked_destination}</code>\n"
-        f"最低充值：${method.minimum_topup_minor / 100:.2f}\n"
-        f"排序：{method.sort_order}",
+        f"最低金额：${method.minimum_topup_minor / 100:.2f}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -497,11 +489,8 @@ async def payment_method_edit_start(callback: CallbackQuery, state: FSMContext) 
         await callback.answer("无效请求", show_alert=True)
         return
     prompts = {
-        "label": "请输入新的支付方式名称：",
-        "description": "请输入新的用户说明：",
-        "destination": "请输入新的收款 UID 或地址：",
-        "minimum": "请输入最低充值金额（USD，例如 1.50）：",
-        "sort": "请输入排序数字（越小越靠前）：",
+        "destination": "📥 请输入新的收款 UID 或钱包地址：",
+        "minimum": "💵 请输入最低支付金额（USD，例如 1.50）：",
     }
     if field not in prompts:
         await callback.answer("不支持的字段", show_alert=True)
@@ -523,12 +512,10 @@ async def payment_method_edit_value(message: Message, state: FSMContext) -> None
     method_id = str(data.get("payment_method_id") or "")
     field = str(data.get("payment_field") or "")
     raw = (message.text or "").strip()
-    field_map = {"minimum": "minimum_topup_minor", "sort": "sort_order"}
+    field_map = {"minimum": "minimum_topup_minor"}
     target = field_map.get(field, field)
     try:
-        value = (
-            round(float(raw) * 100) if field == "minimum" else int(raw) if field == "sort" else raw
-        )
+        value = round(float(raw) * 100) if field == "minimum" else raw
         async with SessionFactory() as session:
             method = await update_payment_method(session, settings, method_id, target, value)
             await record_admin_action(
@@ -550,22 +537,12 @@ async def payment_method_edit_value(message: Message, state: FSMContext) -> None
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="返回支付方式", callback_data=f"adm:pay:view:{method.id}"
+                        text="⬅️ 返回支付方式", callback_data=f"adm:pay:view:{method.id}"
                     )
                 ]
             ]
         ),
     )
-
-
-def _verification_configuration(method_id: str) -> tuple[bool, bool]:
-    if method_id == "usdt_bep20":
-        return bool(settings.usdt_bep20_rpc_url), bool(settings.usdt_bep20_token_contract)
-    if method_id == "usdt_arbitrum":
-        return bool(settings.usdt_arbitrum_rpc_url), bool(settings.usdt_arbitrum_token_contract)
-    if method_id == "usdt_trc20":
-        return bool(settings.usdt_tron_api_url), bool(settings.usdt_trc20_token_contract)
-    return False, False
 
 
 def _mask_payment_destination(value: str) -> str:
