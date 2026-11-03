@@ -42,6 +42,7 @@ from app.services.orders import (
 )
 from app.services.payment_settings import get_payment_method, list_payment_methods
 from app.services.topups import list_user_topups, submit_topup
+from app.ui.navigation import replace_callback_message
 
 router = Router(name="catalog")
 settings = get_settings()
@@ -154,7 +155,22 @@ async def show_home(message: Message) -> None:
 @router.callback_query(F.data == "shop:home")
 async def callback_home(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_home(callback.message, callback.from_user.id)
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+    if account is None:
+        await replace_callback_message(callback, "Account not found. Send /start again.")
+        return
+    language = account.language_code
+    await replace_callback_message(
+        callback,
+        text(
+            language,
+            "main_menu",
+            balance=f"{account.balance_minor / 100:.2f}",
+            points=account.points,
+        ),
+        reply_markup=_home_keyboard(language),
+    )
 
 
 @router.message(Command("help"))
@@ -201,10 +217,11 @@ async def balance_variant(callback: CallbackQuery) -> None:
             )
         )
     if sku is None or price is None:
-        await callback.message.answer("Balance purchase is not available for this plan.")
+        await replace_callback_message(callback, "Balance purchase is not available for this plan.")
         return
     language = await _user_language(callback.from_user.id)
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         f"<b>{html.escape(sku.name)}</b>\n"
         f"{text(language, 'unit_price')}: ${price.amount_minor / 100:.2f}\n\n"
         f"{text(language, 'choose_quantity')}",
@@ -232,7 +249,7 @@ async def balance_custom_quantity(callback: CallbackQuery, state: FSMContext) ->
     sku_id = callback.data.rsplit(":", 1)[1]
     await state.set_state(CustomQuantity.quantity)
     await state.update_data(balance_sku_id=sku_id)
-    await callback.message.answer("Enter quantity from 1 to 100:")
+    await replace_callback_message(callback, "Enter quantity from 1 to 100:")
 
 
 @router.message(CustomQuantity.quantity)
@@ -341,11 +358,12 @@ async def execute_balance_purchase(callback: CallbackQuery) -> None:
                 points_per_usd=settings.points_per_usd,
             )
     except ValueError as exc:
-        await callback.message.answer(f"❌ {html.escape(str(exc))}")
+        await replace_callback_message(callback, f"❌ {html.escape(str(exc))}")
         return
     delivered = "\n".join(f"<code>{html.escape(value)}</code>" for value in delivery.secrets)
     language = await _user_language(callback.from_user.id)
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         f"{text(language, 'purchase_completed')}\n\n"
         f"Order: <code>{delivery.public_id}</code>\n"
         f"Product: {html.escape(delivery.product_name)}\n"
@@ -373,7 +391,8 @@ async def account_balance(callback: CallbackQuery) -> None:
     if account is None:
         return
     language = account.language_code
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         text(
             language,
             "balance_page",
@@ -409,7 +428,8 @@ async def account_topup_history(callback: CallbackQuery) -> None:
             f"\n<code>{str(record.id)[:8]}</code> · {html.escape(record.method)} · "
             f"${record.amount_minor / 100:.2f} · {html.escape(record.status)}"
         )
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "".join(lines),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -427,7 +447,8 @@ async def account_profile(callback: CallbackQuery) -> None:
     if account is None:
         return
     username = f"@{account.username}" if account.username else "—"
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "👤 <b>Your profile</b>\n"
         f"🆔 Telegram ID: <code>{account.telegram_user_id}</code>\n"
         f"👤 Username: {html.escape(username)}\n"
@@ -459,7 +480,8 @@ async def account_referral(callback: CallbackQuery) -> None:
         return
     bot_username = settings.bot_username or "your_bot"
     link = f"https://t.me/{bot_username}?start={account.referral_code}"
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "👥 <b>Referral</b>\n\n"
         f"Link: <code>{html.escape(link)}</code>\n"
         f"Invited users: {account.referral_count}\n"
@@ -484,7 +506,8 @@ async def choose_language(callback: CallbackQuery) -> None:
         account = await get_account(session, callback.from_user.id)
     language = account.language_code if account else "zh"
     rows.append([InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")])
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         text(language, "choose_language"),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -498,13 +521,25 @@ async def save_language(callback: CallbackQuery) -> None:
             session, telegram_user_id=callback.from_user.id, language_code=language
         )
     await callback.answer(text(language, "language_updated"))
-    await send_home(callback.message, callback.from_user.id)
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+    await replace_callback_message(
+        callback,
+        text(
+            language,
+            "main_menu",
+            balance=f"{account.balance_minor / 100:.2f}" if account else "0.00",
+            points=account.points if account else 0,
+        ),
+        reply_markup=_home_keyboard(language),
+    )
 
 
 @router.callback_query(F.data == "account:support")
 async def account_support(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "🆘 <b>Need help?</b>\n"
         f"👤 Administrator: {html.escape(settings.administrator_handle)}\n"
         f"🆘 Support: {html.escape(settings.support_handle)}",
@@ -543,7 +578,9 @@ async def account_topup(callback: CallbackQuery, state: FSMContext) -> None:
         if methods
         else "💳 <b>Top-up methods</b>\nNo USDT payment method is currently enabled."
     )
-    await callback.message.answer(message, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await replace_callback_message(
+        callback, message, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
 
 
 @router.callback_query(F.data.startswith("topup:start:"))
@@ -562,7 +599,8 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
         topup_initiated_at=datetime.now(UTC).isoformat(),
     )
     await state.set_state(ManualTopup.amount)
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         f"💳 <b>{html.escape(method.label)}</b>\n"
         f"Send USDT to: <code>{html.escape(method.destination)}</code>.\n"
         f"Then submit the {html.escape(method.proof_label)}.\n\n"
@@ -584,7 +622,19 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
 async def cancel_topup(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Top-up cancelled")
     await state.clear()
-    await send_home(callback.message, callback.from_user.id)
+    async with SessionFactory() as session:
+        account = await get_account(session, callback.from_user.id)
+    language = account.language_code if account else settings.bot_language
+    await replace_callback_message(
+        callback,
+        text(
+            language,
+            "main_menu",
+            balance=f"{account.balance_minor / 100:.2f}" if account else "0.00",
+            points=account.points if account else 0,
+        ),
+        reply_markup=_home_keyboard(language),
+    )
 
 
 @router.message(ManualTopup.amount)
@@ -644,7 +694,33 @@ async def manual_topup_proof(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "shop:categories")
 async def callback_categories(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_categories(callback.message, callback.from_user.id)
+    async with SessionFactory() as session:
+        categories = await list_catalog_categories(session)
+    language = await _user_language(callback.from_user.id)
+    if not categories:
+        await replace_callback_message(
+            callback,
+            "🛍 No products are available right now.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+            ),
+        )
+        return
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"📁 {category.name} ({category.product_count})",
+                callback_data=f"shop:category:{category.id or 'all'}",
+            )
+        ]
+        for category in categories
+    ]
+    rows.append([InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")])
+    await replace_callback_message(
+        callback,
+        "🛍 <b>Categories</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
 
 
 async def send_categories(target: Message, telegram_user_id: int | None = None) -> None:
@@ -682,7 +758,7 @@ async def callback_category(callback: CallbackQuery) -> None:
         raw_category = callback.data.rsplit(":", 1)[1]
         category_id = None if raw_category == "all" else uuid.UUID(raw_category)
     except (ValueError, IndexError):
-        await callback.message.answer("Invalid category.")
+        await replace_callback_message(callback, "Invalid category.")
         return
     await send_products(callback.message, callback.from_user.id, category_id=category_id)
 
@@ -754,7 +830,8 @@ async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
         return
     await callback.answer()
     _, amount_minor = product.plugin_prices["usdt"]
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "🧾 <b>Confirm USDT purchase</b>\n\n"
         f"Product: {html.escape(product.name)}\n"
         f"Price: ${amount_minor / 100:.2f} USDT\n"
@@ -820,13 +897,14 @@ async def create_usdt_purchase(callback: CallbackQuery, state: FSMContext) -> No
         usdt_proof_label=method.proof_label,
     )
     await callback.answer("Order created")
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "💳 <b>USDT payment order</b>\n\n"
         f"Order: <code>{order.public_id}</code>\n"
         f"Amount: <b>${order.total_amount / 100:.2f} USDT</b>\n"
         f"Send to: <code>{html.escape(method.destination)}</code>\n"
         f"Network: {html.escape(method.label)}\n\n"
-        f"After payment, send the {html.escape(method.proof_label)} here."
+        f"After payment, send the {html.escape(method.proof_label)} here.",
     )
 
 
@@ -873,13 +951,13 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
     try:
         product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
     except (ValueError, IndexError):
-        await callback.message.answer("Invalid product.")
+        await replace_callback_message(callback, "Invalid product.")
         return
     async with SessionFactory() as session:
         products = await list_products(session)
     product = next((item for item in products if item.id == product_id), None)
     if product is None:
-        await callback.message.answer("Product is unavailable.")
+        await replace_callback_message(callback, "Product is unavailable.")
         return
     variants = []
     async with SessionFactory() as session:
@@ -969,7 +1047,8 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
         [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:category:{raw_category}")]
     )
     delivery = "Instant delivery" if available else "Out of stock"
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         f"<b>{html.escape(product.name)}</b>\n\n"
         f"{html.escape(product.description or 'No description available.')}\n\n"
         f"💵 Price: {_product_price(product)}\n"
@@ -992,7 +1071,8 @@ async def unavailable_purchase(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "shop:account")
 async def callback_account(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "👤 <b>My account</b>\n\n"
         f"Name: {html.escape(callback.from_user.full_name)}\n"
         f"Telegram ID: <code>{callback.from_user.id}</code>",
@@ -1010,7 +1090,8 @@ async def callback_account(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "shop:help")
 async def callback_help(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "ℹ️ <b>Help</b>\n\n"
         "1. Choose a product.\n"
         "2. Select an available payment method.\n"
@@ -1113,7 +1194,8 @@ async def order_detail(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         order = await get_user_order(session, callback.from_user.id, public_id)
     if order is None:
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "Order not found.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1143,7 +1225,8 @@ async def order_detail(callback: CallbackQuery) -> None:
             InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
         ]
     )
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "🧾 <b>Order details</b>\n\n"
         f"Product: {html.escape(order.product_name)}\n"
         f"Order: <code>{order.public_id}</code>\n"
@@ -1160,7 +1243,8 @@ async def reveal_order_secret(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         order = await get_user_order(session, callback.from_user.id, public_id)
     if order is None:
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "❌ 订单不存在或不属于当前用户。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1170,7 +1254,8 @@ async def reveal_order_secret(callback: CallbackQuery) -> None:
         )
         return
     if not order.secret:
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "⏳ 该订单尚无可查看的卡密。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1179,7 +1264,8 @@ async def reveal_order_secret(callback: CallbackQuery) -> None:
             ),
         )
         return
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "🔐 <b>订单卡密</b>\n\n"
         f"订单：<code>{order.public_id}</code>\n"
         f"卡密：<code>{html.escape(order.secret)}</code>\n\n"

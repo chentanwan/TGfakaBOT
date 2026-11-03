@@ -25,6 +25,7 @@ from app.services.admin import (
 from app.services.admin_access import is_admin
 from app.services.audit import record_admin_action
 from app.services.topups import list_pending_topups, review_topup
+from app.ui.navigation import replace_callback_message
 
 router = Router(name="admin")
 settings = get_settings()
@@ -108,8 +109,10 @@ async def supplier_admin_home(callback: CallbackQuery) -> None:
     await callback.answer()
     plugins = get_plugin_registry().supplier_plugins
     if not plugins:
-        await callback.message.answer(
-            "当前没有已加载的供应商插件。", reply_markup=_back_markup("adm:home", "« 管理后台")
+        await replace_callback_message(
+            callback,
+            "当前没有已加载的供应商插件。",
+            reply_markup=_back_markup("adm:home", "« 管理后台"),
         )
         return
     rows: list[list[InlineKeyboardButton]] = []
@@ -120,8 +123,8 @@ async def supplier_admin_home(callback: CallbackQuery) -> None:
         buttons = getattr(plugin, "supplier_admin_buttons", lambda: [])()
         rows.extend(buttons)
     rows.append([InlineKeyboardButton(text="« 返回管理后台", callback_data="adm:home")])
-    await callback.message.answer(
-        "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    await replace_callback_message(
+        callback, "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
 
 
@@ -132,7 +135,9 @@ async def admin_home_callback(callback: CallbackQuery, state: FSMContext) -> Non
         return
     await callback.answer()
     await state.clear()
-    await callback.message.answer("⚙️ <b>TGfakaBOT 管理后台</b>", reply_markup=admin_keyboard())
+    await replace_callback_message(
+        callback, "⚙️ <b>TGfakaBOT 管理后台</b>", reply_markup=admin_keyboard()
+    )
 
 
 @router.callback_query(F.data == "adm:new")
@@ -142,7 +147,7 @@ async def new_product_start(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await callback.answer()
     await state.set_state(NewProduct.name)
-    await callback.message.answer("请输入商品名称，发送 /cancel 取消：")
+    await replace_callback_message(callback, "请输入商品名称，发送 /cancel 取消：")
 
 
 @router.message(Command("cancel"))
@@ -210,7 +215,7 @@ async def admin_product_list(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         products = await list_admin_products(session)
     if not products:
-        await callback.message.answer("暂无商品。", reply_markup=admin_keyboard())
+        await replace_callback_message(callback, "暂无商品。", reply_markup=admin_keyboard())
         return
     rows = []
     lines = ["📦 <b>商品与库存</b>", "\n请选择商品查看库存和管理操作："]
@@ -233,8 +238,8 @@ async def admin_product_list(callback: CallbackQuery) -> None:
             InlineKeyboardButton(text="⬅️ 管理后台", callback_data="adm:home"),
         ]
     )
-    await callback.message.answer(
-        "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    await replace_callback_message(
+        callback, "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
 
 
@@ -270,7 +275,8 @@ async def admin_product_detail(callback: CallbackQuery) -> None:
         rows.append(plugin_buttons[index : index + 2])
     rows.append([InlineKeyboardButton(text="« 商品与库存", callback_data="adm:list")])
     await callback.answer()
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "📦 <b>商品管理</b>\n\n"
         f"商品：{html.escape(product.name)}\n"
         f"状态：{icon} {html.escape(product.status)}\n"
@@ -293,7 +299,9 @@ async def cards_start(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.update_data(product_id=str(product_id))
     await state.set_state(CardImport.content)
-    await callback.message.answer("请粘贴卡密，每行一条；单次最多 500 条。发送 /cancel 取消。")
+    await replace_callback_message(
+        callback, "请粘贴卡密，每行一条；单次最多 500 条。发送 /cancel 取消。"
+    )
 
 
 @router.message(CardImport.content)
@@ -391,8 +399,8 @@ async def usdt_payment_health(callback: CallbackQuery) -> None:
         )
     rows = [method_buttons[index : index + 2] for index in range(0, len(method_buttons), 2)]
     rows.append([InlineKeyboardButton(text="⬅️ 管理后台", callback_data="adm:home")])
-    await callback.message.answer(
-        "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    await replace_callback_message(
+        callback, "".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
 
 
@@ -441,7 +449,8 @@ async def payment_method_view(callback: CallbackQuery) -> None:
     verification_status = (
         "🤖 已启用" if automatic_verification_available(settings, method.id) else "👤 人工审核"
     )
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         f"<b>{html.escape(method.label)}</b>\n"
         f"渠道状态：{'✅ 可用' if method.available else '⛔ 停用'}\n"
         f"自动核验：{verification_status}\n"
@@ -498,7 +507,7 @@ async def payment_method_edit_start(callback: CallbackQuery, state: FSMContext) 
     await callback.answer()
     await state.update_data(payment_method_id=method_id, payment_field=field)
     await state.set_state(PaymentMethodEdit.value)
-    await callback.message.answer(prompts[field])
+    await replace_callback_message(callback, prompts[field])
 
 
 @router.message(PaymentMethodEdit.value)
@@ -563,13 +572,15 @@ async def pending_usdt_orders(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         records = await list_manual_usdt_reviews(session)
     if not records:
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "当前没有待审核的商品订单付款。",
             reply_markup=_back_markup("adm:home", "⬅️ 管理后台"),
         )
         return
     for record in records:
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "🧾 <b>待审核商品订单付款</b>\n"
             f"订单：<code>{record.public_id}</code>\n"
             f"用户：<code>{record.telegram_user_id}</code>\n"
@@ -632,7 +643,8 @@ async def ask_usdt_review(callback: CallbackQuery) -> None:
         await redis.aclose()
     label = "确认到账并交付" if action == "a" else "拒绝并释放库存"
     await callback.answer()
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         f"⚠️ <b>{label}</b>\n\n确认令牌 5 分钟内有效且只能使用一次。",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -767,12 +779,13 @@ async def pending_topups(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         records = await list_pending_topups(session)
     if not records:
-        await callback.message.answer(
-            "当前没有待审核充值。", reply_markup=_back_markup("adm:home", "« 管理后台")
+        await replace_callback_message(
+            callback, "当前没有待审核充值。", reply_markup=_back_markup("adm:home", "« 管理后台")
         )
         return
     for record in records:
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "💳 <b>待审核充值</b>\n"
             f"用户：{html.escape(record.display_name)} (<code>{record.telegram_user_id}</code>)\n"
             f"方式：{html.escape(record.method)}\n"
@@ -834,7 +847,7 @@ async def reject_topup_start(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(TopupRejection.reason)
     await state.update_data(reject_topup_id=str(topup_id))
     await callback.answer()
-    await callback.message.answer("请输入拒绝原因；发送 /cancel 取消：")
+    await replace_callback_message(callback, "请输入拒绝原因；发送 /cancel 取消：")
 
 
 @router.message(TopupRejection.reason)
@@ -875,7 +888,7 @@ async def admin_user_find_start(callback: CallbackQuery, state: FSMContext) -> N
         return
     await callback.answer()
     await state.set_state(UserLookup.telegram_id)
-    await callback.message.answer("请输入用户 Telegram 数字 ID：")
+    await replace_callback_message(callback, "请输入用户 Telegram 数字 ID：")
 
 
 @router.message(UserLookup.telegram_id)
@@ -925,7 +938,7 @@ async def admin_balance_start(callback: CallbackQuery, state: FSMContext) -> Non
     await state.set_state(BalanceAdjustment.amount)
     await state.update_data(adjust_user_id=telegram_id)
     await callback.answer()
-    await callback.message.answer("输入调整金额（USD），例如 10 或 -5.50：")
+    await replace_callback_message(callback, "输入调整金额（USD），例如 10 或 -5.50：")
 
 
 @router.message(BalanceAdjustment.amount)
@@ -961,7 +974,7 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext) -> N
         return
     await callback.answer()
     await state.set_state(AdminBroadcast.content)
-    await callback.message.answer("请输入要广播的消息；发送 /cancel 取消：")
+    await replace_callback_message(callback, "请输入要广播的消息；发送 /cancel 取消：")
 
 
 @router.message(AdminBroadcast.content)
@@ -1038,4 +1051,4 @@ async def admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext) ->
         except Exception:
             failed += 1
         await asyncio.sleep(0.05)
-    await callback.message.answer(f"📣 广播完成\n成功：{sent}\n失败：{failed}")
+    await replace_callback_message(callback, f"📣 广播完成\n成功：{sent}\n失败：{failed}")

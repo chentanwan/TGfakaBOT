@@ -20,6 +20,7 @@ from app.services.payment_exceptions import (
     prepare_star_refund,
     reconcile_linked_refund,
 )
+from app.ui.navigation import replace_callback_message
 
 router = Router(name="payment-admin")
 settings = get_settings()
@@ -45,8 +46,8 @@ async def payment_exception_list(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         exceptions = await list_payment_exceptions(session)
     if not exceptions:
-        await callback.message.answer(
-            "✅ 当前没有待处理支付异常。", reply_markup=_back_markup("adm:home")
+        await replace_callback_message(
+            callback, "✅ 当前没有待处理支付异常。", reply_markup=_back_markup("adm:home")
         )
         return
     lines = ["⚠️ <b>支付异常订单</b>"]
@@ -69,8 +70,8 @@ async def payment_exception_list(callback: CallbackQuery) -> None:
             ]
         )
     rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
-    await callback.message.answer(
-        "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    await replace_callback_message(
+        callback, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
 
 
@@ -83,8 +84,8 @@ async def refund_pending_list(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         pending = await list_refund_pending(session)
     if not pending:
-        await callback.message.answer(
-            "✅ 当前没有退款处理中的订单。", reply_markup=_back_markup("adm:home")
+        await replace_callback_message(
+            callback, "✅ 当前没有退款处理中的订单。", reply_markup=_back_markup("adm:home")
         )
         return
     lines = ["⏳ <b>退款处理中与待对账</b>"]
@@ -110,8 +111,8 @@ async def refund_pending_list(callback: CallbackQuery) -> None:
                 ]
             )
     rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
-    await callback.message.answer(
-        "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    await replace_callback_message(
+        callback, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
 
 
@@ -135,7 +136,8 @@ async def ask_action(callback: CallbackQuery) -> None:
     finally:
         await redis.aclose()
     await callback.answer()
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         f"⚠️ <b>确认{label}</b>\n\n确认令牌 5 分钟内有效且只能使用一次。",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -289,8 +291,8 @@ async def start_linked_reconcile(callback: CallbackQuery, state: FSMContext) -> 
     await state.set_state(ReconcileLinkedRefund.evidence)
     await state.update_data(order_id=str(order_id), verdict=verdict)
     await callback.answer()
-    await callback.message.answer(
-        "请输入权威核验依据（交易时间、流水尾号或客服工单）。说明将写入审计记录。"
+    await replace_callback_message(
+        callback, "请输入权威核验依据（交易时间、流水尾号或客服工单）。说明将写入审计记录。"
     )
 
 

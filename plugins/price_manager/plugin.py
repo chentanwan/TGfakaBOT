@@ -17,6 +17,7 @@ from app.plugins.base import PluginProduct
 from app.services.admin_access import is_admin
 from app.services.audit import record_admin_action
 from app.services.product_prices import ProductPriceError, set_product_usd_price
+from app.ui.navigation import replace_callback_message
 
 
 class EditPrice(StatesGroup):
@@ -82,7 +83,8 @@ class PriceManagerPlugin:
             for product in products
         ]
         rows.append([InlineKeyboardButton(text="🏠 管理后台", callback_data="adm:home")])
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "💰 <b>固定价格设置</b>\n仅显示非供应商商品：",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
@@ -134,7 +136,8 @@ class PriceManagerPlugin:
             [InlineKeyboardButton(text="⬅️ 返回价格设置", callback_data="plugin:prices:list")],
         ]
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "\n".join(
                 [
                     f"💰 <b>{html.escape(product.name)}</b>",
@@ -167,8 +170,9 @@ class PriceManagerPlugin:
         await state.update_data(price_product_id=str(product_id))
         await state.set_state(EditPrice.amount)
         await callback.answer()
-        await callback.message.answer(
-            "✏️ 请输入美元售价，例如 4.99。\n保存后 USDT 与账户余额将同时启用；发送 /cancel 取消。"
+        await replace_callback_message(
+            callback,
+            "✏️ 请输入美元售价，例如 4.99。\n保存后 USDT 与账户余额将同时启用；发送 /cancel 取消。",
         )
 
     async def _finish_edit(self, message: Message, state: FSMContext) -> None:
@@ -251,7 +255,8 @@ class PriceManagerPlugin:
                 details={"providers": ["usdt", "balance"]},
             )
         await callback.answer("已停用", show_alert=True)
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "⏸ USDT 与余额支付均已停用。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[

@@ -18,6 +18,7 @@ from app.services.charge_exceptions import (
     list_orphan_charges,
     resolve_orphan_refund,
 )
+from app.ui.navigation import replace_callback_message
 
 router = Router(name="charge-admin")
 settings = get_settings()
@@ -42,8 +43,8 @@ async def orphan_charge_list(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         charges = await list_orphan_charges(session)
     if not charges:
-        await callback.message.answer(
-            "✅ 当前没有未匹配或冲突支付流水。", reply_markup=_back_markup("adm:home")
+        await replace_callback_message(
+            callback, "✅ 当前没有未匹配或冲突支付流水。", reply_markup=_back_markup("adm:home")
         )
         return
     lines = ["🧾 <b>孤立支付流水</b>"]
@@ -80,8 +81,8 @@ async def orphan_charge_list(callback: CallbackQuery) -> None:
                 ]
             )
     rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
-    await callback.message.answer(
-        "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    await replace_callback_message(
+        callback, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
 
 
@@ -103,7 +104,8 @@ async def ask_orphan_refund(callback: CallbackQuery) -> None:
     finally:
         await redis.aclose()
     await callback.answer()
-    await callback.message.answer(
+    await replace_callback_message(
+        callback,
         "⚠️ <b>确认孤立支付退款</b>\n\n请先核对付款用户、金额和流水。操作不可撤销。",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -201,8 +203,8 @@ async def start_reconcile(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ReconcileCharge.evidence)
     await state.update_data(charge_id=str(charge_id), verdict=verdict)
     await callback.answer()
-    await callback.message.answer(
-        "请输入权威核验依据（交易记录时间、流水尾号或客服工单）。该说明将写入审计记录。"
+    await replace_callback_message(
+        callback, "请输入权威核验依据（交易记录时间、流水尾号或客服工单）。该说明将写入审计记录。"
     )
 
 

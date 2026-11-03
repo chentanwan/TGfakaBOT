@@ -30,6 +30,7 @@ from app.services.supplier_orders import (
     record_supplier_recovery,
     save_supplier_order_result,
 )
+from app.ui.navigation import replace_callback_message
 from plugins.prodseller.client import ProdsellerClient, ProdsellerError
 from plugins.prodseller.config import get_prodseller_settings
 from plugins.prodseller.pricing_settings import get_profit_percent, set_profit_percent
@@ -444,7 +445,7 @@ class ProdsellerPlugin:
         try:
             products = await self.client.list_products()
         except ProdsellerError as exc:
-            await callback.message.answer(f"❌ {html.escape(str(exc))}")
+            await replace_callback_message(callback, f"❌ {html.escape(str(exc))}")
             return
         products = [item for item in products if not item["requiresEmailActivation"]]
         async with SessionFactory() as session:
@@ -456,7 +457,8 @@ class ProdsellerPlugin:
                 )
             )
         if not products:
-            await callback.message.answer(
+            await replace_callback_message(
+                callback,
                 "暂无更多可导入的即时交付商品。",
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
@@ -488,8 +490,8 @@ class ProdsellerPlugin:
             )
         rows.append([InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")])
 
-        await callback.message.answer(
-            "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        await replace_callback_message(
+            callback, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
         )
 
     async def _import_from_browser(self, callback: CallbackQuery) -> None:
@@ -504,9 +506,10 @@ class ProdsellerPlugin:
                 raise ProdsellerError("该商品需要买家邮箱，当前版本暂不支持")
             local_id = await self._import_product(product, admin_telegram_id=callback.from_user.id)
         except ProdsellerError as exc:
-            await callback.message.answer(f"❌ {html.escape(str(exc))}")
+            await replace_callback_message(callback, f"❌ {html.escape(str(exc))}")
             return
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             f"✅ 商品已导入为草稿并启用自动美元定价。\n本地商品 ID：<code>{local_id}</code>",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -543,7 +546,8 @@ class ProdsellerPlugin:
         has_next = len(exceptions) > page_size
         exceptions = exceptions[:page_size]
         if not exceptions:
-            await callback.message.answer(
+            await replace_callback_message(
+                callback,
                 "✅ 当前筛选条件下没有待处理供货订单。",
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
@@ -621,8 +625,8 @@ class ProdsellerPlugin:
             rows.append(navigation)
         rows.append([InlineKeyboardButton(text="« 供应商管理", callback_data="adm:suppliers")])
 
-        await callback.message.answer(
-            "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        await replace_callback_message(
+            callback, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
         )
 
     async def _audit_detail(self, callback: CallbackQuery) -> None:
@@ -639,7 +643,7 @@ class ProdsellerPlugin:
             summary = await get_supplier_order_summary(session, supplier_order_id=supplier_order_id)
             supplier_order = await session.get(SupplierOrder, supplier_order_id)
         if summary is None or supplier_order is None:
-            await callback.message.answer("订单不存在。")
+            await replace_callback_message(callback, "订单不存在。")
             return
         response_keys = ", ".join(sorted(supplier_order.response_data.keys())) or "无"
         cost = (
@@ -647,7 +651,8 @@ class ProdsellerPlugin:
             if summary.cost_amount_minor is not None
             else "未知"
         )
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "📋 <b>供货订单审计</b>\n\n"
             f"商品：{html.escape(summary.product_name)}\n"
             f"本地订单：<code>{summary.public_id}</code>\n"
@@ -658,7 +663,7 @@ class ProdsellerPlugin:
             f"恢复人：<code>{supplier_order.recovered_by_telegram_id or '无'}</code>\n"
             f"恢复时间：{supplier_order.recovered_at or '无'}\n"
             f"恢复说明：{html.escape(supplier_order.recovery_note or '无')}\n"
-            f"响应字段：{html.escape(response_keys)}"
+            f"响应字段：{html.escape(response_keys)}",
         )
 
     async def _recovery_candidates(self, callback: CallbackQuery) -> None:
@@ -714,7 +719,8 @@ class ProdsellerPlugin:
                 ]
             )
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "\n".join(lines) + "\n\n⚠️ 仅在人工核对确认后选择。",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
@@ -737,13 +743,13 @@ class ProdsellerPlugin:
         async with SessionFactory() as session:
             supplier_order = await session.get(SupplierOrder, supplier_order_id)
             if supplier_order is None:
-                await callback.message.answer("❌ 本地供货订单不存在。")
+                await replace_callback_message(callback, "❌ 本地供货订单不存在。")
                 return
             context = await get_supplier_purchase_context(
                 session, order_id=supplier_order.order_id, provider=PROVIDER
             )
         if context is None:
-            await callback.message.answer("❌ 找不到本地采购上下文。")
+            await replace_callback_message(callback, "❌ 找不到本地采购上下文。")
             return
         history = await self.client.list_orders(page=1, limit=200)
         candidates = self._reconciliation_candidates(
@@ -752,7 +758,7 @@ class ProdsellerPlugin:
             orders=history["orders"],
         )
         if candidate_index >= len(candidates):
-            await callback.message.answer("❌ 候选列表已变化，请重新打开候选订单。")
+            await replace_callback_message(callback, "❌ 候选列表已变化，请重新打开候选订单。")
             return
         response = candidates[candidate_index]
         external_order_id = response["orderId"]
@@ -780,9 +786,10 @@ class ProdsellerPlugin:
         )
         if response["status"] == "delivered":
             await self._deliver_recovered_order(context.order_id, response)
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             f"✅ 已绑定上游订单 <code>{html.escape(response['orderId'])}</code>，"
-            f"状态：{html.escape(response['status'])}"
+            f"状态：{html.escape(response['status'])}",
         )
 
     async def _recover_query(self, callback: CallbackQuery, state: FSMContext) -> None:
@@ -797,8 +804,8 @@ class ProdsellerPlugin:
         await state.set_state(SupplierRecovery.note)
         await state.update_data(supplier_order_id=str(supplier_order_id))
         await callback.answer()
-        await callback.message.answer(
-            "请输入本次上游核验说明（至少 6 字符）。提交后会查询上游并尝试安全恢复交付。"
+        await replace_callback_message(
+            callback, "请输入本次上游核验说明（至少 6 字符）。提交后会查询上游并尝试安全恢复交付。"
         )
 
     async def _save_recovery_note(self, message: Message, state: FSMContext) -> None:
@@ -888,7 +895,8 @@ class ProdsellerPlugin:
             ).first()
         if row is None:
             await callback.answer()
-            await callback.message.answer(
+            await replace_callback_message(
+                callback,
                 "该商品尚未映射 ProdSeller。",
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
@@ -916,7 +924,8 @@ class ProdsellerPlugin:
         }.get(pricing_mode, "未指定")
 
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "🔌 <b>ProdSeller 商品映射</b>\n\n"
             f"商品：{html.escape(product.name)}\n"
             f"上游 ID：<code>{html.escape(mapping.external_product_id)}</code>\n"
@@ -976,9 +985,10 @@ class ProdsellerPlugin:
         await state.set_state(MapProduct.external_id)
         await state.update_data(map_local_product_id=str(product_id))
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             f"正在映射：<b>{html.escape(product.name)}</b>\n\n"
-            "请输入 ProdSeller 商品 ID；发送 /cancel 取消。"
+            "请输入 ProdSeller 商品 ID；发送 /cancel 取消。",
         )
 
     async def _finish_mapping(self, message: Message, state: FSMContext) -> None:
@@ -1026,7 +1036,9 @@ class ProdsellerPlugin:
         remote = await self.client.get_product(mapping.external_product_id)
         _, suspended = await self._sync_existing([remote])
         await callback.answer("同步完成", show_alert=True)
-        await callback.message.answer(f"✅ 单商品同步完成；利润保护停用 {len(suspended)} 个。")
+        await replace_callback_message(
+            callback, f"✅ 单商品同步完成；利润保护停用 {len(suspended)} 个。"
+        )
 
     async def _toggle_mapping(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
@@ -1076,7 +1088,7 @@ class ProdsellerPlugin:
         await state.set_state(RoutingPriority.value)
         await state.update_data(supplier_mapping_id=str(mapping_id))
         await callback.answer()
-        await callback.message.answer("请输入路由优先级 1–1000；数字越小越优先。")
+        await replace_callback_message(callback, "请输入路由优先级 1–1000；数字越小越优先。")
 
     async def _save_routing_priority(self, message: Message, state: FSMContext) -> None:
         if not self._is_admin(message.from_user.id):
@@ -1126,7 +1138,8 @@ class ProdsellerPlugin:
             percent = await get_profit_percent(session, self.settings.prodseller_profit_percent)
         self._profit_percent = percent
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "📈 <b>利润比例定价</b>\n\n"
             f"当前利润比例：<b>{percent}%</b>\n\n"
             "售价会根据上游成本自动计算：\n"
@@ -1146,9 +1159,10 @@ class ProdsellerPlugin:
             return
         await state.set_state(PricingSettings.profit_percent)
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "📈 请输入自动定价利润比例，例如：<code>20</code> 或 <code>12.5</code>。\n"
-            "允许范围：0%–1000%，最多两位小数。"
+            "允许范围：0%–1000%，最多两位小数。",
         )
 
     async def _save_profit_percent(self, message: Message, state: FSMContext) -> None:
@@ -1247,7 +1261,8 @@ class ProdsellerPlugin:
             await callback.answer(str(exc) or "参数错误", show_alert=True)
             return
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "📈 <b>启用比例自动定价</b>\n\n"
             f"当前利润比例：<b>{self._profit_percent}%</b>\n"
             "上游成本变化时，售价会自动更新。",
@@ -1358,7 +1373,9 @@ class ProdsellerPlugin:
             await callback.answer(str(exc) or "参数错误", show_alert=True)
             return
         await callback.answer("自动定价已启用", show_alert=True)
-        await callback.message.answer(f"✅ 已启用{label}，当前售价 ${sale_minor / 100:.2f}。")
+        await replace_callback_message(
+            callback, f"✅ 已启用{label}，当前售价 ${sale_minor / 100:.2f}。"
+        )
 
     async def _balance(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
@@ -1368,9 +1385,10 @@ class ProdsellerPlugin:
         try:
             balance = await self.client.balance()
         except ProdsellerError as exc:
-            await callback.message.answer(f"❌ {html.escape(str(exc))}")
+            await replace_callback_message(callback, f"❌ {html.escape(str(exc))}")
             return
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             f"ProdSeller 余额：${balance:.2f} USD",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1403,7 +1421,8 @@ class ProdsellerPlugin:
                 if rate.remaining is not None and rate.limit is not None
                 else "上游未返回"
             )
-            await callback.message.answer(
+            await replace_callback_message(
+                callback,
                 "🩺 <b>ProdSeller 健康状态</b>\n\n"
                 "API 鉴权：✅ 正常\n"
                 f"余额：${balance:.2f} USD\n"
@@ -1419,7 +1438,8 @@ class ProdsellerPlugin:
                 ),
             )
         except ProdsellerError as exc:
-            await callback.message.answer(
+            await replace_callback_message(
+                callback,
                 "🩺 <b>ProdSeller 健康状态</b>\n\n"
                 f"API：❌ {html.escape(str(exc))}\n"
                 f"HTTP：{exc.status or '网络/未知'}",
@@ -1453,9 +1473,10 @@ class ProdsellerPlugin:
                     },
                 )
         except ProdsellerError as exc:
-            await callback.message.answer(f"❌ {html.escape(str(exc))}")
+            await replace_callback_message(callback, f"❌ {html.escape(str(exc))}")
             return
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             f"✅ 已同步 {updated} 个已接入商品；利润保护停用 {len(suspended)} 个。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1470,7 +1491,7 @@ class ProdsellerPlugin:
             return
         await state.set_state(ImportProduct.external_id)
         await callback.answer()
-        await callback.message.answer("请输入 ProdSeller 商品 ID；发送 /cancel 取消。")
+        await replace_callback_message(callback, "请输入 ProdSeller 商品 ID；发送 /cancel 取消。")
 
     async def _finish_import(self, message: Message, state: FSMContext) -> None:
         if not self._is_admin(message.from_user.id):

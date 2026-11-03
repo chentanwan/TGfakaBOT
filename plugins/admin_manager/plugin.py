@@ -20,6 +20,7 @@ from app.services.admin_access import (
     remove_dynamic_admin,
 )
 from app.services.audit import record_admin_action
+from app.ui.navigation import replace_callback_message
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,8 @@ class AdminManagerPlugin:
             [InlineKeyboardButton(text="➕ 新增管理员", callback_data="plugin:adminmgr:add")]
         )
         rows.append([InlineKeyboardButton(text="« 管理后台", callback_data="adm:home")])
-        await callback.message.answer(
-            "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        await replace_callback_message(
+            callback, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
         )
 
     async def _start_add(self, callback: CallbackQuery, state: FSMContext) -> None:
@@ -110,10 +111,11 @@ class AdminManagerPlugin:
             return
         await callback.answer()
         await state.set_state(AddAdministrator.telegram_id)
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             "请输入要添加的 Telegram 数字 ID。\n"
             "目标用户必须先与机器人对话，才能接收状态通知。\n"
-            "发送 /cancel 取消。"
+            "发送 /cancel 取消。",
         )
 
     async def _finish_add(self, message: Message, state: FSMContext) -> None:
@@ -183,7 +185,8 @@ class AdminManagerPlugin:
             await callback.answer("不能删除自己的管理员权限", show_alert=True)
             return
         await callback.answer()
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             f"确认删除管理员 <code>{telegram_id}</code>？",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -221,7 +224,8 @@ class AdminManagerPlugin:
                     target_id=str(telegram_id),
                 )
         await callback.answer("已删除" if removed else "管理员不存在", show_alert=True)
-        await callback.message.answer(
+        await replace_callback_message(
+            callback,
             f"✅ 已删除管理员 <code>{telegram_id}</code>。" if removed else "管理员不存在。",
             reply_markup=self._back(),
         )
