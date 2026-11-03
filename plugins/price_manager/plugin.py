@@ -11,7 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiohttp import web
 from sqlalchemy import select
 
-from app.db.models import SKU, Product, ProductPrice
+from app.db.models import SKU, Product, ProductPrice, SupplierProduct
 from app.db.session import SessionFactory
 from app.plugins.base import PluginProduct
 from app.services.admin_access import is_admin
@@ -62,8 +62,15 @@ class PriceManagerPlugin:
             return
         await callback.answer()
         async with SessionFactory() as session:
+            supplier_product_ids = select(SKU.product_id).join(
+                SupplierProduct, SupplierProduct.sku_id == SKU.id
+            )
             products = list(
-                await session.scalars(select(Product).order_by(Product.created_at.desc()))
+                await session.scalars(
+                    select(Product)
+                    .where(Product.id.not_in(supplier_product_ids))
+                    .order_by(Product.created_at.desc())
+                )
             )
         rows = [
             [
@@ -76,7 +83,7 @@ class PriceManagerPlugin:
         ]
         rows.append([InlineKeyboardButton(text="🏠 管理后台", callback_data="adm:home")])
         await callback.message.answer(
-            "💰 <b>商品定价</b>\n请选择商品：",
+            "💰 <b>固定价格设置</b>\n仅显示非供应商商品：",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -101,6 +108,12 @@ class PriceManagerPlugin:
                 await callback.answer("商品不存在", show_alert=True)
                 return
             product, sku = row
+            supplier_mapping = await session.scalar(
+                select(SupplierProduct.id).where(SupplierProduct.sku_id == sku.id)
+            )
+            if supplier_mapping is not None:
+                await callback.answer("供应商商品请在供应商管理中设置利润比例", show_alert=True)
+                return
             prices = list(
                 await session.scalars(select(ProductPrice).where(ProductPrice.sku_id == sku.id))
             )
@@ -111,18 +124,11 @@ class PriceManagerPlugin:
         enabled = bool(
             usdt_price and balance_price and usdt_price.is_active and balance_price.is_active
         )
-        pricing_mode = (current.metadata_json or {}).get("pricing") if current else None
-        pricing_label = {
-            "auto_fixed": "自动定价 · 固定利润",
-            "auto_percent": "自动定价 · 比例利润",
-            "auto_markup": "自动定价 · 组合利润",
-            "manual_protected": "手动定价",
-        }.get(pricing_mode, "手动定价")
         price_text = f"${current.amount_minor / 100:.2f}" if current else "未设置"
         status = "✅ USDT 与余额均已启用" if enabled else "⏸ USDT 与余额已停用"
         rows = [
             [
-                InlineKeyboardButton(text="✏️ 设置美元售价", callback_data=f"pp:e:{product_id}"),
+                InlineKeyboardButton(text="✏️ 设置固定售价", callback_data=f"pp:e:{product_id}"),
                 InlineKeyboardButton(text="⏸ 停用全部支付", callback_data=f"pp:d:{product_id}"),
             ],
             [InlineKeyboardButton(text="⬅️ 返回价格设置", callback_data="plugin:prices:list")],
@@ -133,7 +139,7 @@ class PriceManagerPlugin:
                 [
                     f"💰 <b>{html.escape(product.name)}</b>",
                     f"💵 美元售价：{price_text}",
-                    f"📊 定价模式：{pricing_label}",
+                    "📊 定价模式：固定价格",
                     f"💳 支付状态：{status}",
                 ]
             ),
@@ -148,6 +154,15 @@ class PriceManagerPlugin:
             product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
         except (ValueError, IndexError):
             await callback.answer("参数错误", show_alert=True)
+            return
+        async with SessionFactory() as session:
+            is_supplier = await session.scalar(
+                select(SupplierProduct.id)
+                .join(SKU, SKU.id == SupplierProduct.sku_id)
+                .where(SKU.product_id == product_id)
+            )
+        if is_supplier is not None:
+            await callback.answer("供应商商品仅支持利润比例定价", show_alert=True)
             return
         await state.update_data(price_product_id=str(product_id))
         await state.set_state(EditPrice.amount)
@@ -168,6 +183,13 @@ class PriceManagerPlugin:
             amount = int((decimal_amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
             metadata = {"pricing": "manual_protected"}
             async with SessionFactory() as session:
+                is_supplier = await session.scalar(
+                    select(SupplierProduct.id)
+                    .join(SKU, SKU.id == SupplierProduct.sku_id)
+                    .where(SKU.product_id == product_id)
+                )
+                if is_supplier is not None:
+                    raise ProductPriceError("供应商商品仅支持利润比例定价")
                 await set_product_usd_price(
                     session,
                     product_id=product_id,
@@ -210,6 +232,14 @@ class PriceManagerPlugin:
             await callback.answer("参数错误", show_alert=True)
             return
         async with SessionFactory() as session:
+            is_supplier = await session.scalar(
+                select(SupplierProduct.id)
+                .join(SKU, SKU.id == SupplierProduct.sku_id)
+                .where(SKU.product_id == product_id)
+            )
+            if is_supplier is not None:
+                await callback.answer("供应商商品由库存和利润比例自动控制", show_alert=True)
+                return
             await set_product_usd_price(session, product_id=product_id, amount_minor=None)
         async with SessionFactory() as session, session.begin():
             await record_admin_action(

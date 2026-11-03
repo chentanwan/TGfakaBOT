@@ -18,10 +18,8 @@ def test_price_manager_uses_one_usd_price_for_both_payments() -> None:
 def test_supplier_supports_fixed_percent_and_manual_pricing() -> None:
     source = Path("plugins/prodseller/plugin.py").read_text()
     assert '"auto_percent": "自动定价 · 比例利润"' in source
-    assert '"manual_protected": "手动定价"' in source
     assert "📈 比例利润" in source
     assert "🤖 自动定价" in source
-    assert "✏️ 手动定价" in source
     assert "profit_fixed_minor" in source
     assert "profit_percent" in source
 

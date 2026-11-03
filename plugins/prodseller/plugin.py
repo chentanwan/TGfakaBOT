@@ -50,10 +50,6 @@ class SupplierRecovery(StatesGroup):
     note = State()
 
 
-class CustomPrice(StatesGroup):
-    amount = State()
-
-
 class RoutingPriority(StatesGroup):
     value = State()
 
@@ -102,7 +98,6 @@ class ProdsellerPlugin:
             self._start_routing_priority,
             F.data.startswith("ps:p:"),
         )
-        self.router.callback_query.register(self._start_custom_price, F.data.startswith("ps:c:"))
         self.router.callback_query.register(self._recover_query, F.data.startswith("ps:r:"))
         self.router.callback_query.register(
             self._recovery_candidates,
@@ -115,7 +110,6 @@ class ProdsellerPlugin:
         self.router.message.register(self._finish_import, ImportProduct.external_id)
         self.router.message.register(self._finish_mapping, MapProduct.external_id)
         self.router.message.register(self._save_recovery_note, SupplierRecovery.note)
-        self.router.message.register(self._save_custom_price, CustomPrice.amount)
         self.router.message.register(self._save_routing_priority, RoutingPriority.value)
         self.router.message.register(self._save_profit_percent, PricingSettings.profit_percent)
         self._bot: Bot | None = None
@@ -918,7 +912,7 @@ class ProdsellerPlugin:
             "auto_fixed": "自动定价 · 比例利润",
             "auto_percent": "自动定价 · 比例利润",
             "auto_markup": "自动定价 · 比例利润",
-            "manual_protected": "手动定价",
+            "manual_protected": "比例定价（待同步）",
         }.get(pricing_mode, "未指定")
 
         await callback.answer()
@@ -950,13 +944,9 @@ class ProdsellerPlugin:
                     ],
                     [
                         InlineKeyboardButton(
-                            text="🤖 自动定价",
+                            text=f"📈 利润比例定价 · {self._profit_percent}%",
                             callback_data=f"ps:g:{mapping.id}",
-                        ),
-                        InlineKeyboardButton(
-                            text="✏️ 手动定价",
-                            callback_data=f"ps:c:{mapping.id}",
-                        ),
+                        )
                     ],
                     [
                         InlineKeyboardButton(
@@ -1370,88 +1360,6 @@ class ProdsellerPlugin:
         await callback.answer("自动定价已启用", show_alert=True)
         await callback.message.answer(f"✅ 已启用{label}，当前售价 ${sale_minor / 100:.2f}。")
 
-    async def _start_custom_price(self, callback: CallbackQuery, state: FSMContext) -> None:
-        if not self._is_admin(callback.from_user.id):
-            await callback.answer("无权限", show_alert=True)
-            return
-        try:
-            supplier_product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
-        except (ValueError, IndexError):
-            await callback.answer("参数错误", show_alert=True)
-            return
-        await state.set_state(CustomPrice.amount)
-        await state.update_data(supplier_product_id=str(supplier_product_id))
-        await callback.answer()
-        await callback.message.answer("请输入新的 USD 售价，例如 9.99。")
-
-    async def _save_custom_price(self, message: Message, state: FSMContext) -> None:
-        if not self._is_admin(message.from_user.id):
-            return
-        try:
-            amount = Decimal((message.text or "").strip())
-            if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
-                raise ValueError
-            amount_minor = int(amount * 100)
-            data = await state.get_data()
-            supplier_product_id = uuid.UUID(data["supplier_product_id"])
-            async with SessionFactory() as session, session.begin():
-                mapping = await session.scalar(
-                    select(SupplierProduct)
-                    .where(SupplierProduct.id == supplier_product_id)
-                    .with_for_update()
-                )
-                if mapping is None:
-                    raise ValueError("上游商品不存在")
-                required = self._sale_price(mapping.cost_amount_minor)
-                if amount_minor < required:
-                    raise ValueError(f"售价低于当前最低安全售价 ${required / 100:.2f}")
-                price = await session.scalar(
-                    select(ProductPrice)
-                    .where(
-                        ProductPrice.sku_id == mapping.sku_id,
-                        ProductPrice.provider == "usdt",
-                    )
-                    .with_for_update()
-                )
-                if price is None:
-                    raise ValueError("销售价格不存在")
-                metadata = {
-                    **(price.metadata_json or {}),
-                    "source": PROVIDER,
-                    "pricing": "manual_protected",
-                    "minimum_safe_minor": required,
-                }
-                price.amount_minor = amount_minor
-                price.is_active = True
-                price.metadata_json = metadata
-                balance = await session.scalar(
-                    select(ProductPrice)
-                    .where(
-                        ProductPrice.sku_id == mapping.sku_id,
-                        ProductPrice.provider == "balance",
-                    )
-                    .with_for_update()
-                )
-                if balance is None:
-                    balance = ProductPrice(
-                        sku_id=mapping.sku_id,
-                        provider="balance",
-                        currency="USD",
-                        amount_minor=amount_minor,
-                    )
-                    session.add(balance)
-                balance.amount_minor = amount_minor
-                balance.currency = "USD"
-                balance.is_active = True
-                balance.metadata_json = metadata
-                mapping.suspended_for_profit = False
-                mapping.suspension_reason = None
-        except (ValueError, KeyError) as exc:
-            await message.answer(f"❌ {html.escape(str(exc) or '价格无效')}")
-            return
-        await state.clear()
-        await message.answer(f"✅ 已更新并启用售价：${amount_minor / 100:.2f}")
-
     async def _balance(self, callback: CallbackQuery) -> None:
         if not self._is_admin(callback.from_user.id):
             await callback.answer("无权限", show_alert=True)
@@ -1735,10 +1643,9 @@ class ProdsellerPlugin:
                     sku_id=sku.id, provider="usdt", currency="USD", amount_minor=sale_minor
                 )
                 session.add(price)
-                pricing_mode = "auto_percent"
             else:
-                price.amount_minor = max(price.amount_minor, sale_minor)
-                pricing_mode = "manual_protected"
+                price.amount_minor = sale_minor
+            pricing_mode = "auto_percent"
             price.is_active = True
             price.metadata_json = {
                 "source": PROVIDER,
@@ -1852,7 +1759,6 @@ class ProdsellerPlugin:
                         "auto_fixed",
                         "auto_percent",
                         "auto_markup",
-                        "manual_protected",
                     }:
                         price.is_active = bool(remote["inStock"])
                     mapping.suspended_for_profit = False
@@ -1898,13 +1804,9 @@ class ProdsellerPlugin:
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text=f"✅ 使用 ${suggested / 100:.2f}",
+                            text=f"✅ 按 {self._profit_percent}% 更新为 ${suggested / 100:.2f}",
                             callback_data=f"ps:ap:p:{mapping_id}",
-                        ),
-                        InlineKeyboardButton(
-                            text="✏️ 自定义售价",
-                            callback_data=f"ps:c:{mapping_id}",
-                        ),
+                        )
                     ]
                 ]
             )
