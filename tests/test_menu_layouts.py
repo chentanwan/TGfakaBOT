@@ -7,8 +7,8 @@ def test_core_menu_layouts_are_grouped() -> None:
 
     assert "rows = [field_buttons[:2], field_buttons[2:4], field_buttons[4:]]" in admin
     assert "method_buttons[index : index + 2]" in admin
-    assert 'InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),' in catalog
-    assert 'InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),' in catalog
+    assert 'InlineKeyboardButton(text="📦 我的订单", callback_data="my_orders"),' in catalog
+    assert 'InlineKeyboardButton(text="🏠 首页", callback_data="shop:home"),' in catalog
     assert 'text=text(language, "topup"), callback_data="account:topup"' in catalog
     assert 'text=text(language, "topup_history"), callback_data="account:topups"' in catalog
 

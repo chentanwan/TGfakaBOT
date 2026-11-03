@@ -98,7 +98,7 @@ def _home_keyboard(language: str) -> InlineKeyboardMarkup:
 def _product_price(product) -> str:
     if product.display_price_usd_minor is not None:
         return f"${product.display_price_usd_minor / 100:.2f} USD"
-    return "USD price unavailable"
+    return "美元价格不可用"
 
 
 async def _user_language(telegram_user_id: int) -> str:
@@ -111,7 +111,7 @@ async def send_home(target: Message, telegram_user_id: int) -> None:
     async with SessionFactory() as session:
         account = await get_account(session, telegram_user_id)
     if account is None:
-        await target.answer("Account not found. Send /start again.")
+        await target.answer("账户不存在，请重新发送 /start。")
         return
     language = account.language_code
     await target.answer(
@@ -158,7 +158,7 @@ async def callback_home(callback: CallbackQuery) -> None:
     async with SessionFactory() as session:
         account = await get_account(session, callback.from_user.id)
     if account is None:
-        await replace_callback_message(callback, "Account not found. Send /start again.")
+        await replace_callback_message(callback, "账户不存在，请重新发送 /start。")
         return
     language = account.language_code
     await replace_callback_message(
@@ -178,11 +178,19 @@ async def show_help_command(message: Message) -> None:
     async with SessionFactory() as session:
         account = await get_account(session, message.from_user.id)
     language = account.language_code if account else settings.bot_language
-    await message.answer(
-        "ℹ️ <b>Help</b>\n\n"
+    help_text = (
+        "ℹ️ <b>使用帮助</b>\n\n"
+        "使用主菜单浏览商品、充值余额和查看订单。\n"
+        "购买流程：商品 → 规格 → 数量 → 确认 → 交付。\n"
+        f"客服：{html.escape(settings.support_handle)}"
+        if language == "zh"
+        else "ℹ️ <b>Help</b>\n\n"
         "Use the main menu to browse products, top up your balance and view orders.\n"
         "Purchase flow: product → plan → quantity → confirmation → delivery.\n"
-        f"Support: {html.escape(settings.support_handle)}",
+        f"Support: {html.escape(settings.support_handle)}"
+    )
+    await message.answer(
+        help_text,
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text=text(language, "back"), callback_data="shop:home")]
@@ -217,7 +225,7 @@ async def balance_variant(callback: CallbackQuery) -> None:
             )
         )
     if sku is None or price is None:
-        await replace_callback_message(callback, "Balance purchase is not available for this plan.")
+        await replace_callback_message(callback, "该商品暂不支持余额购买。")
         return
     language = await _user_language(callback.from_user.id)
     await replace_callback_message(
@@ -232,10 +240,10 @@ async def balance_variant(callback: CallbackQuery) -> None:
                     InlineKeyboardButton(text="5", callback_data=f"balance:qty:{sku_id}:5"),
                     InlineKeyboardButton(text="10", callback_data=f"balance:qty:{sku_id}:10"),
                 ],
-                [InlineKeyboardButton(text="Custom", callback_data=f"balance:custom:{sku_id}")],
+                [InlineKeyboardButton(text="自定义", callback_data=f"balance:custom:{sku_id}")],
                 [
                     InlineKeyboardButton(
-                        text="« Back", callback_data=f"shop:product:{sku.product_id}"
+                        text="⬅️ 返回", callback_data=f"shop:product:{sku.product_id}"
                     )
                 ],
             ]
@@ -249,7 +257,7 @@ async def balance_custom_quantity(callback: CallbackQuery, state: FSMContext) ->
     sku_id = callback.data.rsplit(":", 1)[1]
     await state.set_state(CustomQuantity.quantity)
     await state.update_data(balance_sku_id=sku_id)
-    await replace_callback_message(callback, "Enter quantity from 1 to 100:")
+    await replace_callback_message(callback, "请输入购买数量（1–100）：")
 
 
 @router.message(CustomQuantity.quantity)
@@ -261,7 +269,7 @@ async def save_custom_quantity(message: Message, state: FSMContext) -> None:
         if quantity < 1 or quantity > 100:
             raise ValueError
     except (ValueError, KeyError):
-        await message.answer("Quantity must be a whole number from 1 to 100.")
+        await message.answer("购买数量必须是 1–100 的整数。")
         return
     await state.clear()
     await send_balance_confirmation(message, message.from_user.id, sku_id, quantity)
@@ -302,7 +310,7 @@ async def send_balance_confirmation(
         ).one_or_none()
         account = await get_account(session, telegram_user_id)
     if row is None or account is None:
-        await target.answer("Product is unavailable.")
+        await target.answer("商品当前不可用。")
         return
     sku, product, price = row
     total = price.amount_minor * quantity
@@ -313,7 +321,7 @@ async def send_balance_confirmation(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🛒 Buy now",
+                    text="🛒 立即购买",
                     callback_data=f"bb:{sku.id}:{quantity}:{token}",
                     style="success",
                 )
@@ -321,21 +329,17 @@ async def send_balance_confirmation(
         )
     else:
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text="💳 Insufficient balance · Top up", callback_data="account:topup"
-                )
-            ]
+            [InlineKeyboardButton(text="💳 余额不足 · 立即充值", callback_data="account:topup")]
         )
-    rows.append([InlineKeyboardButton(text="« Back", callback_data=f"balance:variant:{sku.id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ 返回", callback_data=f"balance:variant:{sku.id}")])
     language = await _user_language(telegram_user_id)
     await target.answer(
         f"{text(language, 'confirm_purchase')}\n\n"
-        f"Product: {html.escape(product.name)} · {html.escape(sku.name)}\n"
+        f"商品：{html.escape(product.name)} · {html.escape(sku.name)}\n"
         f"{text(language, 'quantity')}: {quantity}\n"
         f"{text(language, 'unit_price')}: ${price.amount_minor / 100:.2f}\n"
         f"{text(language, 'total')}: ${total / 100:.2f}\n"
-        f"Balance: ${account.balance_minor / 100:.2f}",
+        f"余额：${account.balance_minor / 100:.2f}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -365,8 +369,8 @@ async def execute_balance_purchase(callback: CallbackQuery) -> None:
     await replace_callback_message(
         callback,
         f"{text(language, 'purchase_completed')}\n\n"
-        f"Order: <code>{delivery.public_id}</code>\n"
-        f"Product: {html.escape(delivery.product_name)}\n"
+        f"订单：<code>{delivery.public_id}</code>\n"
+        f"商品：{html.escape(delivery.product_name)}\n"
         f"{text(language, 'quantity')}: {delivery.quantity}\n"
         f"{text(language, 'unit_price')}: ${delivery.unit_price_minor / 100:.2f}\n"
         f"{text(language, 'total')}: ${delivery.total_amount_minor / 100:.2f}\n\n"
@@ -375,8 +379,8 @@ async def execute_balance_purchase(callback: CallbackQuery) -> None:
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
-                    InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+                    InlineKeyboardButton(text="📦 我的订单", callback_data="my_orders"),
+                    InlineKeyboardButton(text="🏠 首页", callback_data="shop:home"),
                 ]
             ]
         ),
@@ -420,7 +424,7 @@ async def account_topup_history(callback: CallbackQuery) -> None:
     await callback.answer()
     async with SessionFactory() as session:
         records = await list_user_topups(session, telegram_user_id=callback.from_user.id)
-    lines = ["🧾 <b>Top-up history</b>"]
+    lines = ["🧾 <b>充值记录</b>"]
     if not records:
         lines.append("\nNo top-up records yet.")
     for record in records:
@@ -433,7 +437,7 @@ async def account_topup_history(callback: CallbackQuery) -> None:
         "".join(lines),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="« Balance", callback_data="account:balance")]
+                [InlineKeyboardButton(text="⬅️ 我的余额", callback_data="account:balance")]
             ]
         ),
     )
@@ -453,19 +457,19 @@ async def account_profile(callback: CallbackQuery) -> None:
         f"🆔 Telegram ID: <code>{account.telegram_user_id}</code>\n"
         f"👤 Username: {html.escape(username)}\n"
         f"🏅 Tier: {html.escape(account.tier)}\n"
-        f"💵 Balance: ${account.balance_minor / 100:.2f}\n"
+        f"💵 余额：${account.balance_minor / 100:.2f}\n"
         f"⭐ Points: {account.points}\n"
-        f"📦 Orders: {account.order_count}\n"
+        f"📦 订单：{account.order_count}\n"
         f"💸 Total spent: ${account.total_spent_minor / 100:.2f}\n"
         f"🔑 Referral code: <code>{account.referral_code}</code>\n"
         f"📅 Registered: {account.created_at:%m/%d/%Y}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
-                    InlineKeyboardButton(text="👥 Referral", callback_data="account:referral"),
+                    InlineKeyboardButton(text="📦 我的订单", callback_data="my_orders"),
+                    InlineKeyboardButton(text="👥 推荐奖励", callback_data="account:referral"),
                 ],
-                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+                [InlineKeyboardButton(text="⬅️ 返回", callback_data="shop:home")],
             ]
         ),
     )
@@ -483,11 +487,11 @@ async def account_referral(callback: CallbackQuery) -> None:
     await replace_callback_message(
         callback,
         "👥 <b>Referral</b>\n\n"
-        f"Link: <code>{html.escape(link)}</code>\n"
-        f"Invited users: {account.referral_count}\n"
-        f"Rewards: ${account.referral_reward_minor / 100:.2f}",
+        f"推荐链接：<code>{html.escape(link)}</code>\n"
+        f"已邀请用户：{account.referral_count}\n"
+        f"累计奖励：${account.referral_reward_minor / 100:.2f}",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="account:profile")]]
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ 返回", callback_data="account:profile")]]
         ),
     )
 
@@ -541,8 +545,8 @@ async def account_support(callback: CallbackQuery) -> None:
     await replace_callback_message(
         callback,
         "🆘 <b>Need help?</b>\n"
-        f"👤 Administrator: {html.escape(settings.administrator_handle)}\n"
-        f"🆘 Support: {html.escape(settings.support_handle)}",
+        f"👤 管理员：{html.escape(settings.administrator_handle)}\n"
+        f"🆘 客服：{html.escape(settings.support_handle)}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -554,7 +558,7 @@ async def account_support(callback: CallbackQuery) -> None:
                         text=f"🆘 {settings.support_handle} ↗", url=settings.support_url
                     ),
                 ],
-                [InlineKeyboardButton(text="« Back", callback_data="shop:home")],
+                [InlineKeyboardButton(text="⬅️ 返回", callback_data="shop:home")],
             ]
         ),
     )
@@ -572,11 +576,11 @@ async def account_topup(callback: CallbackQuery, state: FSMContext) -> None:
         [InlineKeyboardButton(text=method.label, callback_data=f"topup:start:{method.id}")]
         for method in methods
     ]
-    rows.append([InlineKeyboardButton(text="« Back", callback_data="shop:home")])
+    rows.append([InlineKeyboardButton(text="⬅️ 返回", callback_data="shop:home")])
     message = (
-        "💳 <b>Top-up methods</b>\nChoose a USDT payment method:"
+        "💳 <b>充值方式</b>\n请选择 USDT 支付方式："
         if methods
-        else "💳 <b>Top-up methods</b>\nNo USDT payment method is currently enabled."
+        else "💳 <b>充值方式</b>\n当前没有可用的 USDT 支付方式。"
     )
     await replace_callback_message(
         callback, message, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
@@ -589,7 +593,7 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
     async with SessionFactory() as session:
         method = await get_payment_method(session, settings, method_id)
     if method is None or not method.available:
-        await callback.answer("This payment method is unavailable.", show_alert=True)
+        await callback.answer("该支付方式当前不可用。", show_alert=True)
         return
     await callback.answer()
     await state.update_data(
@@ -602,17 +606,13 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
     await replace_callback_message(
         callback,
         f"💳 <b>{html.escape(method.label)}</b>\n"
-        f"Send USDT to: <code>{html.escape(method.destination)}</code>.\n"
+        f"请将 USDT 发送至：<code>{html.escape(method.destination)}</code>。\n"
         f"Then submit the {html.escape(method.proof_label)}.\n\n"
         f"💵 Minimum: ${method.minimum_topup_minor / 100:.2f}\n"
-        "How much did you send? Enter the USD amount:",
+        "请输入已支付的美元金额：",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✖ Cancel", callback_data="topup:cancel", style="danger"
-                    )
-                ]
+                [InlineKeyboardButton(text="✖ 取消", callback_data="topup:cancel", style="danger")]
             ]
         ),
     )
@@ -620,7 +620,7 @@ async def start_manual_topup(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.callback_query(F.data == "topup:cancel")
 async def cancel_topup(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Top-up cancelled")
+    await callback.answer("已取消充值")
     await state.clear()
     async with SessionFactory() as session:
         account = await get_account(session, callback.from_user.id)
@@ -649,11 +649,11 @@ async def manual_topup_amount(message: Message, state: FSMContext) -> None:
         if amount_minor < minimum_topup_minor:
             raise ValueError
     except ValueError:
-        await message.answer(f"Enter a valid amount of at least ${minimum_topup_minor / 100:.2f}.")
+        await message.answer(f"请输入有效金额，最低充值 ${minimum_topup_minor / 100:.2f}。")
         return
     await state.update_data(topup_amount_minor=amount_minor)
     await state.set_state(ManualTopup.proof)
-    proof_label = data.get("topup_proof_label", "transaction hash")
+    proof_label = data.get("topup_proof_label", "交易哈希")
     await message.answer(f"Send the {html.escape(str(proof_label))}:")
 
 
@@ -679,14 +679,14 @@ async def manual_topup_proof(message: Message, state: FSMContext) -> None:
 
     outcome = await verify_topup(record.id)
     status_text = (
-        "✅ Payment automatically verified and balance credited."
+        "✅ 付款已自动核验，余额已到账。"
         if outcome.state.startswith("approved")
-        else "✅ Submitted. Automatic payment verification is in progress."
+        else "✅ 已提交，系统正在自动核验付款。"
     )
     await message.answer(
         f"{status_text}\nReference: <code>{record.id}</code>",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="« Main menu", callback_data="shop:home")]]
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ 主菜单", callback_data="shop:home")]]
         ),
     )
 
@@ -702,7 +702,7 @@ async def callback_categories(callback: CallbackQuery) -> None:
             callback,
             "🛍 No products are available right now.",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+                inline_keyboard=[[InlineKeyboardButton(text="🏠 首页", callback_data="shop:home")]]
             ),
         )
         return
@@ -731,7 +731,7 @@ async def send_categories(target: Message, telegram_user_id: int | None = None) 
         await target.answer(
             "🛍 No products are available right now.",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+                inline_keyboard=[[InlineKeyboardButton(text="🏠 首页", callback_data="shop:home")]]
             ),
         )
         return
@@ -744,7 +744,7 @@ async def send_categories(target: Message, telegram_user_id: int | None = None) 
         ]
         for category in categories
     ]
-    rows.append([InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")])
+    rows.append([InlineKeyboardButton(text="🏠 首页", callback_data="shop:home")])
     await target.answer(
         text(language, "choose_category"),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -758,7 +758,7 @@ async def callback_category(callback: CallbackQuery) -> None:
         raw_category = callback.data.rsplit(":", 1)[1]
         category_id = None if raw_category == "all" else uuid.UUID(raw_category)
     except (ValueError, IndexError):
-        await replace_callback_message(callback, "Invalid category.")
+        await replace_callback_message(callback, "无效的商品分类。")
         return
     await send_products(callback.message, callback.from_user.id, category_id=category_id)
 
@@ -773,11 +773,11 @@ async def send_products(
     language = await _user_language(telegram_user_id)
     if not products:
         await target.answer(
-            "No products are available in this selection.",
+            "该分类暂无可用商品。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="« Categories", callback_data="shop:categories")],
-                    [InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")],
+                    [InlineKeyboardButton(text="⬅️ 商品分类", callback_data="shop:categories")],
+                    [InlineKeyboardButton(text="🏠 首页", callback_data="shop:home")],
                 ]
             ),
         )
@@ -797,8 +797,8 @@ async def send_products(
         )
     rows.append(
         [
-            InlineKeyboardButton(text="📁 Categories", callback_data="shop:categories"),
-            InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+            InlineKeyboardButton(text="📁 商品分类", callback_data="shop:categories"),
+            InlineKeyboardButton(text="🏠 首页", callback_data="shop:home"),
         ]
     )
     title = products[0].category_name if category_id is not None else text(language, "products")
@@ -815,36 +815,36 @@ async def confirm_usdt_purchase(callback: CallbackQuery) -> None:
         _, method_id, raw_product_id = callback.data.split(":", 2)
         product_id = uuid.UUID(raw_product_id)
     except (ValueError, IndexError):
-        await callback.answer("Invalid payment request.", show_alert=True)
+        await callback.answer("无效的支付请求。", show_alert=True)
         return
     async with SessionFactory() as session:
         method = await get_payment_method(session, settings, method_id)
     if method is None or not method.available:
-        await callback.answer("This payment method is unavailable.", show_alert=True)
+        await callback.answer("该支付方式当前不可用。", show_alert=True)
         return
     async with SessionFactory() as session:
         products = await list_products(session)
     product = next((item for item in products if item.id == product_id), None)
     if product is None or "usdt" not in product.plugin_prices:
-        await callback.answer("This payment option is unavailable.", show_alert=True)
+        await callback.answer("该支付选项当前不可用。", show_alert=True)
         return
     await callback.answer()
     _, amount_minor = product.plugin_prices["usdt"]
     await replace_callback_message(
         callback,
         "🧾 <b>Confirm USDT purchase</b>\n\n"
-        f"Product: {html.escape(product.name)}\n"
-        f"Price: ${amount_minor / 100:.2f} USDT\n"
-        f"Payment: {html.escape(method.label)}",
+        f"商品：{html.escape(product.name)}\n"
+        f"价格：${amount_minor / 100:.2f} USDT\n"
+        f"支付方式：{html.escape(method.label)}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="✅ Create payment order",
+                        text="✅ 创建支付订单",
                         callback_data=f"uo:{method.id}:{product.id}",
                     )
                 ],
-                [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:product:{product.id}")],
+                [InlineKeyboardButton(text="⬅️ 返回", callback_data=f"shop:product:{product.id}")],
             ]
         ),
     )
@@ -856,12 +856,12 @@ async def create_usdt_purchase(callback: CallbackQuery, state: FSMContext) -> No
         _, method_id, raw_product_id = callback.data.split(":", 2)
         product_id = uuid.UUID(raw_product_id)
     except (ValueError, IndexError):
-        await callback.answer("Invalid payment request.", show_alert=True)
+        await callback.answer("无效的支付请求。", show_alert=True)
         return
     async with SessionFactory() as session:
         method = await get_payment_method(session, settings, method_id)
     if method is None or not method.available:
-        await callback.answer("This payment method is unavailable.", show_alert=True)
+        await callback.answer("该支付方式当前不可用。", show_alert=True)
         return
     try:
         async with SessionFactory() as session:
@@ -896,14 +896,14 @@ async def create_usdt_purchase(callback: CallbackQuery, state: FSMContext) -> No
         usdt_provider=method.id,
         usdt_proof_label=method.proof_label,
     )
-    await callback.answer("Order created")
+    await callback.answer("订单已创建")
     await replace_callback_message(
         callback,
         "💳 <b>USDT payment order</b>\n\n"
-        f"Order: <code>{order.public_id}</code>\n"
-        f"Amount: <b>${order.total_amount / 100:.2f} USDT</b>\n"
-        f"Send to: <code>{html.escape(method.destination)}</code>\n"
-        f"Network: {html.escape(method.label)}\n\n"
+        f"订单：<code>{order.public_id}</code>\n"
+        f"金额：<b>${order.total_amount / 100:.2f} USDT</b>\n"
+        f"收款地址：<code>{html.escape(method.destination)}</code>\n"
+        f"网络：{html.escape(method.label)}\n\n"
         f"After payment, send the {html.escape(method.proof_label)} here.",
     )
 
@@ -940,9 +940,9 @@ async def submit_usdt_purchase_proof(message: Message, state: FSMContext) -> Non
     outcome = await verify_order(payment_id)
     await _notify_delivery(message.bot, outcome)
     if outcome.state == "paid":
-        await message.answer("✅ Payment automatically verified. Fulfillment has started.")
+        await message.answer("✅ 付款已自动核验，正在交付商品。")
     else:
-        await message.answer("✅ Payment proof submitted. Automatic verification is in progress.")
+        await message.answer("✅ 付款凭证已提交，系统正在自动核验。")
 
 
 @router.callback_query(F.data.startswith("shop:product:"))
@@ -951,13 +951,13 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
     try:
         product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
     except (ValueError, IndexError):
-        await replace_callback_message(callback, "Invalid product.")
+        await replace_callback_message(callback, "无效商品。")
         return
     async with SessionFactory() as session:
         products = await list_products(session)
     product = next((item for item in products if item.id == product_id), None)
     if product is None:
-        await replace_callback_message(callback, "Product is unavailable.")
+        await replace_callback_message(callback, "商品当前不可用。")
         return
     variants = []
     async with SessionFactory() as session:
@@ -987,7 +987,7 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"💵 Buy with balance · ${variants[0].balance_price_minor / 100:.2f}",
+                    text=f"💵 余额购买 · ${variants[0].balance_price_minor / 100:.2f}",
                     callback_data=f"balance:variant:{variants[0].sku_id}",
                     style="success" if variants[0].stock > 0 else "danger",
                 )
@@ -1044,15 +1044,20 @@ async def callback_product_detail(callback: CallbackQuery) -> None:
         )
     raw_category = str(product.category_id) if product.category_id else "all"
     rows.append(
-        [InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:category:{raw_category}")]
+        [InlineKeyboardButton(text="⬅️ 返回", callback_data=f"shop:category:{raw_category}")]
     )
-    delivery = "Instant delivery" if available else "Out of stock"
+    delivery = "即时交付" if available else "暂时缺货"
+    description = product.description or (
+        "暂无商品说明。" if language == "zh" else "No description available."
+    )
+    price_label = "价格" if language == "zh" else "Price"
+    delivery_label = "交付" if language == "zh" else "Delivery"
     await replace_callback_message(
         callback,
         f"<b>{html.escape(product.name)}</b>\n\n"
-        f"{html.escape(product.description or 'No description available.')}\n\n"
-        f"💵 Price: {_product_price(product)}\n"
-        f"⚡ Delivery: {delivery}",
+        f"{html.escape(description)}\n\n"
+        f"💵 {price_label}：{_product_price(product)}\n"
+        f"⚡ {delivery_label}：{delivery}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -1073,14 +1078,14 @@ async def callback_account(callback: CallbackQuery) -> None:
     await callback.answer()
     await replace_callback_message(
         callback,
-        "👤 <b>My account</b>\n\n"
-        f"Name: {html.escape(callback.from_user.full_name)}\n"
-        f"Telegram ID: <code>{callback.from_user.id}</code>",
+        "👤 <b>我的账户</b>\n\n"
+        f"姓名：{html.escape(callback.from_user.full_name)}\n"
+        f"Telegram ID：<code>{callback.from_user.id}</code>",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
-                    InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+                    InlineKeyboardButton(text="📦 我的订单", callback_data="my_orders"),
+                    InlineKeyboardButton(text="🏠 首页", callback_data="shop:home"),
                 ]
             ]
         ),
@@ -1092,13 +1097,13 @@ async def callback_help(callback: CallbackQuery) -> None:
     await callback.answer()
     await replace_callback_message(
         callback,
-        "ℹ️ <b>Help</b>\n\n"
-        "1. Choose a product.\n"
-        "2. Select an available payment method.\n"
-        "3. Complete payment before the order expires.\n"
-        "4. Your digital product will be delivered in Telegram.",
+        "ℹ️ <b>使用帮助</b>\n\n"
+        "1. 选择需要购买的商品。\n"
+        "2. 选择可用的支付方式。\n"
+        "3. 在订单失效前完成付款。\n"
+        "4. 数字商品将在 Telegram 内自动交付。",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+            inline_keyboard=[[InlineKeyboardButton(text="🏠 首页", callback_data="shop:home")]]
         ),
     )
 
@@ -1138,7 +1143,7 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
         await target.answer(
             "📦 暂无订单。",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="🏠 Home", callback_data="shop:home")]]
+                inline_keyboard=[[InlineKeyboardButton(text="🏠 首页", callback_data="shop:home")]]
             ),
         )
         return
@@ -1151,25 +1156,25 @@ async def send_orders(target: Message, telegram_user_id: int, *, page: int) -> N
             else f"{order.total_amount / 100:.2f} {order.currency}"
         )
         status_labels = {
-            "pending_payment": "Awaiting payment",
-            "payment_processing": "Processing",
-            "paid": "Paid",
-            "fulfilled": "Delivered",
-            "expired": "Expired",
-            "payment_exception": "Needs support",
-            "refund_pending": "Refund pending",
-            "refunded": "Refunded",
+            "pending_payment": "等待付款",
+            "payment_processing": "处理中",
+            "paid": "已付款",
+            "fulfilled": "已交付",
+            "expired": "已失效",
+            "payment_exception": "需要人工处理",
+            "refund_pending": "退款处理中",
+            "refunded": "已退款",
         }
         blocks.append(
             f"<b>{html.escape(order.product_name)}</b>\n"
-            f"Order: <code>{order.public_id}</code>\n"
-            f"Amount: {amount_text}\n"
-            f"Status: {status_labels.get(order.status, order.status)}"
+            f"订单：<code>{order.public_id}</code>\n"
+            f"金额：{amount_text}\n"
+            f"状态：{status_labels.get(order.status, order.status)}"
         )
         secret_rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"View {order.public_id}",
+                    text=f"查看 {order.public_id}",
                     callback_data=f"order_detail:{order.public_id}",
                 )
             ]
@@ -1196,10 +1201,10 @@ async def order_detail(callback: CallbackQuery) -> None:
     if order is None:
         await replace_callback_message(
             callback,
-            "Order not found.",
+            "订单不存在。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="« My orders", callback_data="my_orders")]
+                    [InlineKeyboardButton(text="⬅️ 我的订单", callback_data="my_orders")]
                 ]
             ),
         )
@@ -1214,24 +1219,24 @@ async def order_detail(callback: CallbackQuery) -> None:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🔐 View delivered product",
+                    text="🔐 查看已交付商品",
                     callback_data=f"order_secret:{order.public_id}",
                 )
             ]
         )
     rows.append(
         [
-            InlineKeyboardButton(text="📦 My orders", callback_data="my_orders"),
-            InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+            InlineKeyboardButton(text="📦 我的订单", callback_data="my_orders"),
+            InlineKeyboardButton(text="🏠 首页", callback_data="shop:home"),
         ]
     )
     await replace_callback_message(
         callback,
-        "🧾 <b>Order details</b>\n\n"
-        f"Product: {html.escape(order.product_name)}\n"
-        f"Order: <code>{order.public_id}</code>\n"
-        f"Amount: {amount}\n"
-        f"Status: {html.escape(order.status)}",
+        "🧾 <b>订单详情</b>\n\n"
+        f"商品：{html.escape(order.product_name)}\n"
+        f"订单：<code>{order.public_id}</code>\n"
+        f"金额：{amount}\n"
+        f"状态：{html.escape(order.status)}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -1248,7 +1253,7 @@ async def reveal_order_secret(callback: CallbackQuery) -> None:
             "❌ 订单不存在或不属于当前用户。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="« My orders", callback_data="my_orders")]
+                    [InlineKeyboardButton(text="⬅️ 我的订单", callback_data="my_orders")]
                 ]
             ),
         )
@@ -1259,7 +1264,7 @@ async def reveal_order_secret(callback: CallbackQuery) -> None:
             "⏳ 该订单尚无可查看的卡密。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="« My orders", callback_data="my_orders")]
+                    [InlineKeyboardButton(text="⬅️ 我的订单", callback_data="my_orders")]
                 ]
             ),
         )
@@ -1274,9 +1279,9 @@ async def reveal_order_secret(callback: CallbackQuery) -> None:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="« Order details", callback_data=f"order_detail:{order.public_id}"
+                        text="⬅️ 订单详情", callback_data=f"order_detail:{order.public_id}"
                     ),
-                    InlineKeyboardButton(text="🏠 Home", callback_data="shop:home"),
+                    InlineKeyboardButton(text="🏠 首页", callback_data="shop:home"),
                 ]
             ]
         ),
