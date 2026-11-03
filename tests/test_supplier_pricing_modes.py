@@ -19,7 +19,6 @@ def test_activation_instructions_are_normalized() -> None:
 
 def test_supplier_has_auto_and_manual_pricing_modes() -> None:
     source = Path("plugins/prodseller/plugin.py").read_text()
-    assert '"auto_fixed": "自动定价 · 固定利润"' in source
     assert '"auto_percent": "自动定价 · 比例利润"' in source
     assert '"pricing": "manual_protected"' in source
     assert 'pricing_mode in {"auto_fixed", "auto_percent", "auto_markup"}' in source

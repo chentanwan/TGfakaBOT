@@ -36,3 +36,13 @@ def test_custom_ratio_drives_import_switch_and_sync() -> None:
     assert "value = self._profit_percent" in source
     assert "Decimal(100) + self._profit_percent" in source
     assert 'metadata.get("profit_percent", self._profit_percent)' in source
+
+
+def test_pricing_ui_only_exposes_percentage_mode() -> None:
+    source = Path("plugins/prodseller/plugin.py").read_text()
+    assert "📈 <b>利润比例定价</b>" in source
+    assert "✏️ 设置利润比例" in source
+    assert "⚙️ 设置全局利润比例" in source
+    assert "固定利润" not in source
+    assert "ps:ap:f:" not in source
+    assert "prodseller_profit_fixed" not in source

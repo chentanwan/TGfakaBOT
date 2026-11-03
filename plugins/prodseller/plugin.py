@@ -915,9 +915,9 @@ class ProdsellerPlugin:
         profit = actual - mapping.cost_amount_minor if actual is not None else None
         pricing_mode = (price.metadata_json or {}).get("pricing") if price else None
         pricing_label = {
-            "auto_fixed": "自动定价 · 固定利润",
+            "auto_fixed": "自动定价 · 比例利润",
             "auto_percent": "自动定价 · 比例利润",
-            "auto_markup": "自动定价 · 组合利润",
+            "auto_markup": "自动定价 · 比例利润",
             "manual_protected": "手动定价",
         }.get(pricing_mode, "未指定")
 
@@ -1137,13 +1137,14 @@ class ProdsellerPlugin:
         self._profit_percent = percent
         await callback.answer()
         await callback.message.answer(
-            "⚙️ <b>自动定价设置</b>\n\n"
-            f"📈 默认比例利润：<b>{percent}%</b>\n"
-            f"💵 默认固定利润：<b>${self.settings.prodseller_profit_fixed:.2f}</b>\n\n"
-            "修改后会立即更新所有使用比例自动定价的商品。",
+            "📈 <b>利润比例定价</b>\n\n"
+            f"当前利润比例：<b>{percent}%</b>\n\n"
+            "售价会根据上游成本自动计算：\n"
+            f"<code>成本 × (1 + {percent}%)</code>\n\n"
+            "修改后，所有自动定价商品将立即更新。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="✏️ 修改比例利润", callback_data="ps:set:percent")],
+                    [InlineKeyboardButton(text="✏️ 设置利润比例", callback_data="ps:set:percent")],
                     [InlineKeyboardButton(text="⬅️ 供应商管理", callback_data="adm:suppliers")],
                 ]
             ),
@@ -1251,30 +1252,33 @@ class ProdsellerPlugin:
             return
         try:
             mapping_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
-        except (ValueError, IndexError):
-            await callback.answer("参数错误", show_alert=True)
+            product_id = await self._mapping_product_id(mapping_id)
+        except (ValueError, IndexError) as exc:
+            await callback.answer(str(exc) or "参数错误", show_alert=True)
             return
         await callback.answer()
         await callback.message.answer(
-            "🤖 <b>自动定价方式</b>\n\n请选择利润计算方式：",
+            "📈 <b>启用比例自动定价</b>\n\n"
+            f"当前利润比例：<b>{self._profit_percent}%</b>\n"
+            "上游成本变化时，售价会自动更新。",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text=f"💵 固定利润 · ${self.settings.prodseller_profit_fixed:.2f}",
-                            callback_data=f"ps:ap:f:{mapping_id}",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text=f"📈 比例利润 · {self._profit_percent}%",
+                            text=f"✅ 使用 {self._profit_percent}% 自动定价",
                             callback_data=f"ps:ap:p:{mapping_id}",
+                            style="success",
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            text="⬅️ 返回商品详情",
-                            callback_data=f"ps:m:{await self._mapping_product_id(mapping_id)}",
+                            text="⚙️ 设置全局利润比例",
+                            callback_data="plugin:prodseller:pricing",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ 返回商品详情", callback_data=f"ps:m:{product_id}"
                         )
                     ],
                 ]
@@ -1298,8 +1302,8 @@ class ProdsellerPlugin:
         try:
             _, _, mode, raw_mapping_id = callback.data.split(":", 3)
             mapping_id = uuid.UUID(raw_mapping_id)
-            if mode not in {"f", "p"}:
-                raise ValueError
+            if mode != "p":
+                raise ValueError("仅支持利润比例自动定价")
             async with SessionFactory() as session, session.begin():
                 mapping = await session.scalar(
                     select(SupplierProduct)
@@ -1318,25 +1322,15 @@ class ProdsellerPlugin:
                 )
                 if price is None:
                     raise ValueError("销售价格不存在")
-                if mode == "f":
-                    value = self.settings.prodseller_profit_fixed
-                    fixed_minor = int((value * 100).to_integral_value(rounding=ROUND_CEILING))
-                    sale_minor = mapping.cost_amount_minor + fixed_minor
-                    pricing = "auto_fixed"
-                    metadata = {"profit_fixed_minor": fixed_minor}
-                    label = f"固定利润 ${fixed_minor / 100:.2f}"
-                else:
-                    value = self._profit_percent
-                    sale_minor = int(
-                        (
-                            Decimal(mapping.cost_amount_minor)
-                            * (Decimal(100) + value)
-                            / Decimal(100)
-                        ).to_integral_value(rounding=ROUND_CEILING)
-                    )
-                    pricing = "auto_percent"
-                    metadata = {"profit_percent": str(value)}
-                    label = f"比例利润 {value}%"
+                value = self._profit_percent
+                sale_minor = int(
+                    (
+                        Decimal(mapping.cost_amount_minor) * (Decimal(100) + value) / Decimal(100)
+                    ).to_integral_value(rounding=ROUND_CEILING)
+                )
+                pricing = "auto_percent"
+                metadata = {"profit_percent": str(value)}
+                label = f"比例利润 {value}%"
                 common = {
                     **(price.metadata_json or {}),
                     "source": PROVIDER,
@@ -1824,12 +1818,15 @@ class ProdsellerPlugin:
                 ):
                     pricing_mode = "auto_markup"
                 if price and pricing_mode in {"auto_fixed", "auto_percent", "auto_markup"}:
+                    if pricing_mode != "auto_percent":
+                        pricing_mode = "auto_percent"
                     price.amount_minor = required_sale
                     price.is_active = bool(remote["inStock"])
                     price.metadata_json = {
                         **(price.metadata_json or {}),
                         "source": PROVIDER,
                         "pricing": pricing_mode,
+                        "profit_percent": str(self._profit_percent),
                         "minimum_safe_minor": required_sale,
                     }
                     mapping.suspended_for_profit = False
@@ -1902,7 +1899,7 @@ class ProdsellerPlugin:
                     [
                         InlineKeyboardButton(
                             text=f"✅ 使用 ${suggested / 100:.2f}",
-                            callback_data=f"ps:g:{mapping_id}",
+                            callback_data=f"ps:ap:p:{mapping_id}",
                         ),
                         InlineKeyboardButton(
                             text="✏️ 自定义售价",
@@ -1967,8 +1964,6 @@ class ProdsellerPlugin:
 
     def _price_for_mode(self, cost_minor: int, metadata: dict) -> int:
         mode = metadata.get("pricing")
-        if mode == "auto_fixed":
-            return cost_minor + int(metadata.get("profit_fixed_minor", 0))
         if mode == "auto_percent":
             percent = Decimal(str(metadata.get("profit_percent", self._profit_percent)))
             sale = Decimal(cost_minor) * (Decimal(100) + percent) / Decimal(100)
@@ -1977,8 +1972,7 @@ class ProdsellerPlugin:
 
     def _sale_price(self, cost_minor: int) -> int:
         multiplier = (Decimal(100) + self._profit_percent) / Decimal(100)
-        fixed_minor = self.settings.prodseller_profit_fixed * Decimal(100)
-        sale = Decimal(cost_minor) * multiplier + fixed_minor
+        sale = Decimal(cost_minor) * multiplier
         return int(sale.to_integral_value(rounding=ROUND_CEILING))
 
     @staticmethod
