@@ -205,59 +205,63 @@ async def show_shop_command(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("balance:variant:"))
-async def balance_variant(callback: CallbackQuery) -> None:
+async def balance_variant(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     try:
         sku_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
     except (ValueError, IndexError):
         return
-    from sqlalchemy import select
+    from sqlalchemy import func
 
-    from app.db.models import SKU, ProductPrice
+    from app.db.base import CardStatus
+    from app.db.models import SKU, Card, ProductPrice, SupplierProduct
 
     async with SessionFactory() as session:
-        sku = await session.get(SKU, sku_id)
-        price = await session.scalar(
-            select(ProductPrice).where(
-                ProductPrice.sku_id == sku_id,
-                ProductPrice.provider == "balance",
-                ProductPrice.is_active.is_(True),
+        row = (
+            await session.execute(
+                select(
+                    SKU,
+                    ProductPrice,
+                    func.count(Card.id).filter(Card.status == CardStatus.AVAILABLE),
+                    func.bool_or(SupplierProduct.in_stock).filter(
+                        SupplierProduct.suspended_for_profit.is_(False)
+                    ),
+                )
+                .join(
+                    ProductPrice,
+                    (ProductPrice.sku_id == SKU.id)
+                    & (ProductPrice.provider == "balance")
+                    & ProductPrice.is_active.is_(True),
+                )
+                .outerjoin(Card, Card.sku_id == SKU.id)
+                .outerjoin(SupplierProduct, SupplierProduct.sku_id == SKU.id)
+                .where(SKU.id == sku_id)
+                .group_by(SKU.id, ProductPrice.id)
             )
-        )
-    if sku is None or price is None:
+        ).one_or_none()
+    if row is None:
         await replace_callback_message(callback, "该商品暂不支持余额购买。")
         return
-    language = await _user_language(callback.from_user.id)
+    sku, price, local_stock, supplier_in_stock = row
+    stock_text = "充足" if supplier_in_stock else str(local_stock)
+    await state.set_state(CustomQuantity.quantity)
+    await state.update_data(balance_sku_id=str(sku_id))
     await replace_callback_message(
         callback,
-        f"<b>{html.escape(sku.name)}</b>\n"
-        f"{text(language, 'unit_price')}: ${price.amount_minor / 100:.2f}\n\n"
-        f"{text(language, 'choose_quantity')}",
+        "🛒 <b>您想购买多少件？</b>\n\n"
+        f"库存：<b>{stock_text}</b>\n"
+        f"单价：<b>${price.amount_minor / 100:.2f}</b>\n\n"
+        "请输入数量（例如2）：",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="1", callback_data=f"balance:qty:{sku_id}:1"),
-                    InlineKeyboardButton(text="5", callback_data=f"balance:qty:{sku_id}:5"),
-                    InlineKeyboardButton(text="10", callback_data=f"balance:qty:{sku_id}:10"),
-                ],
-                [InlineKeyboardButton(text="自定义", callback_data=f"balance:custom:{sku_id}")],
                 [
                     InlineKeyboardButton(
                         text="⬅️ 返回", callback_data=f"shop:product:{sku.product_id}"
                     )
-                ],
+                ]
             ]
         ),
     )
-
-
-@router.callback_query(F.data.startswith("balance:custom:"))
-async def balance_custom_quantity(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    sku_id = callback.data.rsplit(":", 1)[1]
-    await state.set_state(CustomQuantity.quantity)
-    await state.update_data(balance_sku_id=sku_id)
-    await replace_callback_message(callback, "请输入购买数量（1–100）：")
 
 
 @router.message(CustomQuantity.quantity)
@@ -273,18 +277,6 @@ async def save_custom_quantity(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await send_balance_confirmation(message, message.from_user.id, sku_id, quantity)
-
-
-@router.callback_query(F.data.startswith("balance:qty:"))
-async def balance_quantity(callback: CallbackQuery) -> None:
-    await callback.answer()
-    try:
-        _, _, raw_sku, raw_quantity = callback.data.split(":", 3)
-        sku_id = uuid.UUID(raw_sku)
-        quantity = int(raw_quantity)
-    except (ValueError, IndexError):
-        return
-    await send_balance_confirmation(callback.message, callback.from_user.id, sku_id, quantity)
 
 
 async def send_balance_confirmation(
@@ -946,8 +938,9 @@ async def submit_usdt_purchase_proof(message: Message, state: FSMContext) -> Non
 
 
 @router.callback_query(F.data.startswith("shop:product:"))
-async def callback_product_detail(callback: CallbackQuery) -> None:
+async def callback_product_detail(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await state.clear()
     try:
         product_id = uuid.UUID(callback.data.rsplit(":", 1)[1])
     except (ValueError, IndexError):

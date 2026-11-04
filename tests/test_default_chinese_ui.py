@@ -11,7 +11,6 @@ def test_default_language_is_chinese() -> None:
 def test_storefront_buttons_are_chinese_by_default() -> None:
     source = Path("app/handlers/catalog.py").read_text()
     expected = (
-        "自定义",
         "立即购买",
         "余额不足 · 立即充值",
         "我的订单",
@@ -38,7 +37,7 @@ def test_storefront_buttons_are_chinese_by_default() -> None:
 
 def test_chinese_workflow_prompts_are_present() -> None:
     source = Path("app/handlers/catalog.py").read_text()
-    assert "请输入购买数量（1–100）" in source
+    assert "请输入数量（例如2）" in source
     assert "请选择 USDT 支付方式" in source
     assert "请输入已支付的美元金额" in source
     assert "付款已自动核验" in source

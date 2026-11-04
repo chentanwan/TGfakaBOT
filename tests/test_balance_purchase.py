@@ -15,16 +15,16 @@ def test_balance_purchase_is_idempotent() -> None:
     assert "duplicate=True" in source
 
 
-def test_quantity_and_plan_ui_are_present() -> None:
+def test_quantity_input_page_is_direct_and_minimal() -> None:
     source = Path("app/handlers/catalog.py").read_text()
-    for value in (
-        "balance:variant:",
-        "balance:qty:",
-        "balance:custom:",
-        "balance:buy:",
-        "Choose quantity",
-    ):
-        assert value in source
+    assert "balance:variant:" in source
+    assert "您想购买多少件？" in source
+    assert "库存：<b>" in source
+    assert "单价：<b>" in source
+    assert "请输入数量（例如2）：" in source
+    assert 'text="⬅️ 返回"' in source
+    assert "balance:qty:" not in source
+    assert "balance:custom:" not in source
 
 
 def test_multiple_cards_can_share_one_order_item() -> None:
